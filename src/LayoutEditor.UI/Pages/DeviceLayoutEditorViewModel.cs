@@ -20,11 +20,13 @@ using Stylet;
 
 namespace LayoutEditor.UI.Pages
 {
-    public class DeviceLayoutEditorViewModel : Screen
+    public class DeviceLayoutEditorViewModel : Screen, IDisposable
     {
         private readonly ShellViewModel _shellViewModel;
         private readonly IWindowManager _windowManager;
         private FileSystemWatcher _fileWatcher;
+        private BitmapImage _cachedDeviceImage;
+        private string _cachedDeviceImagePath;
 
         public DeviceLayoutEditorViewModel(LayoutEditModel model, ShellViewModel shellViewModel, IWindowManager windowManager)
         {
@@ -87,12 +89,20 @@ namespace LayoutEditor.UI.Pages
                 if (!File.Exists(fileUri.LocalPath))
                     return DependencyProperty.UnsetValue;
 
+                // Return cached image if path hasn't changed
+                if (_cachedDeviceImage != null && _cachedDeviceImagePath == fileUri.LocalPath)
+                    return _cachedDeviceImage;
+
                 var image = new BitmapImage();
                 image.BeginInit();
                 image.CacheOption = BitmapCacheOption.OnLoad;
                 image.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
                 image.UriSource = fileUri;
                 image.EndInit();
+                image.Freeze();
+
+                _cachedDeviceImage = image;
+                _cachedDeviceImagePath = fileUri.LocalPath;
                 return image;
             }
         }
@@ -123,9 +133,26 @@ namespace LayoutEditor.UI.Pages
             _windowManager.ShowDialog(new AddImageLayoutViewModel(_windowManager, this));
         }
 
-        public void Reset()
+        public void NewLayout()
         {
-            _shellViewModel.Reset();
+            var result = _windowManager.ShowMessageBox(
+                "Start a new layout? Any unsaved changes will be lost.",
+                "Confirm",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (result == MessageBoxResult.Yes)
+                _shellViewModel.Reset();
+        }
+
+        public void LoadLayout()
+        {
+            var result = _windowManager.ShowMessageBox(
+                "Open a different layout? Any unsaved changes will be lost.",
+                "Confirm",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (result == MessageBoxResult.Yes)
+                _shellViewModel.Reset();
         }
 
         public async Task Save()
@@ -274,14 +301,24 @@ namespace LayoutEditor.UI.Pages
 
         protected override void OnClose()
         {
-            if (_fileWatcher != null)
-                _fileWatcher.Changed -= FileWatcherOnChanged;
-
+            Dispose();
             base.OnClose();
+        }
+
+        public void Dispose()
+        {
+            if (_fileWatcher != null)
+            {
+                _fileWatcher.Changed -= FileWatcherOnChanged;
+                _fileWatcher.Dispose();
+                _fileWatcher = null;
+            }
         }
 
         private void UpdateDeviceImage()
         {
+            _cachedDeviceImage = null;
+            _cachedDeviceImagePath = null;
             InputImage = Path.GetFileName(LayoutCustomDeviceData.DeviceImage);
             NotifyOfPropertyChange(nameof(DeviceImage));
 
@@ -289,6 +326,7 @@ namespace LayoutEditor.UI.Pages
             if (_fileWatcher != null)
             {
                 _fileWatcher.Changed -= FileWatcherOnChanged;
+                _fileWatcher.Dispose();
                 _fileWatcher = null;
             }
 
@@ -304,6 +342,8 @@ namespace LayoutEditor.UI.Pages
 
         private void FileWatcherOnChanged(object sender, FileSystemEventArgs e)
         {
+            _cachedDeviceImage = null;
+            _cachedDeviceImagePath = null;
             NotifyOfPropertyChange(nameof(DeviceImage));
         }
     }

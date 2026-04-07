@@ -26,10 +26,10 @@
             <DockPanel VerticalAlignment="Top">
                 <Menu DockPanel.Dock="Top" Background="White" BorderBrush="#FF535353">
                     <MenuItem Header="_File">
-                        <MenuItem Command="{s:Action Reset}" Header="_Discard &amp; restart" />
-                        <MenuItem Command="{s:Action Save}" Header="_Save current layout" />
+                        <MenuItem Command="{s:Action Save}" Header="_Export layout..." />
                         <Separator />
-                        <MenuItem Header="_Exit" />
+                        <MenuItem Command="{s:Action NewLayout}" Header="_New layout" />
+                        <MenuItem Command="{s:Action LoadLayout}" Header="_Open layout..." />
                     </MenuItem>
                 </Menu>
             </DockPanel>
@@ -37,6 +37,7 @@
 
         <Grid Margin="5 25 5 5">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -132,8 +133,32 @@
                 <Label Content="mm" Height="22" Margin="5, 0" VerticalAlignment="Top" HorizontalAlignment="Center" />
             </StackPanel>
 
-            <ContentControl s:View.Model="{Binding DeviceLayoutViewModel}" Grid.Column="0" Grid.Row="6"
-                            Grid.ColumnSpan="5" Margin="0,18,0,0" Grid.RowSpan="2" />
+            <!-- Toolbar -->
+            <Border Grid.Column="0" Grid.Row="7" Grid.ColumnSpan="5" Background="#F0F0F0" BorderBrush="#D0D0D0" BorderThickness="0,1" Padding="4,2" Margin="0,10,0,0">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Zoom:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <TextBlock Text="{Binding DeviceLayoutViewModel.Zoom, StringFormat={}{0:P0}}" VerticalAlignment="Center" Width="40" />
+                    <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="4,2" />
+                    <TextBlock Text="LED Count:" VerticalAlignment="Center" Margin="4,0" />
+                    <TextBlock Text="{Binding DeviceLayoutViewModel.Items.Count}" VerticalAlignment="Center" FontWeight="Bold" />
+                    <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="4,2" />
+                    <TextBlock Text="Selected:" VerticalAlignment="Center" Margin="4,0" />
+                    <TextBlock Text="{Binding DeviceLayoutViewModel.SelectedLed.LedLayout.Id, FallbackValue=None}" VerticalAlignment="Center" FontWeight="Bold" />
+                    <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="4,2" />
+                    <TextBlock Text="Pos:" VerticalAlignment="Center" Margin="4,0" />
+                    <TextBlock VerticalAlignment="Center">
+                        <TextBlock.Text>
+                            <MultiBinding StringFormat="{}{0}, {1}">
+                                <Binding Path="DeviceLayoutViewModel.SelectedLed.InputX" FallbackValue="-" />
+                                <Binding Path="DeviceLayoutViewModel.SelectedLed.InputY" FallbackValue="-" />
+                            </MultiBinding>
+                        </TextBlock.Text>
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <ContentControl s:View.Model="{Binding DeviceLayoutViewModel}" Grid.Column="0" Grid.Row="8"
+                            Grid.ColumnSpan="5" Margin="0,2,0,0" />
 
         </Grid>
     </Grid>

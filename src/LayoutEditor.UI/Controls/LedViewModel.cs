@@ -24,16 +24,33 @@ using SolidColorBrush = System.Windows.Media.SolidColorBrush;
 
 namespace LayoutEditor.UI.Controls
 {
-    public class LedViewModel : Screen
+    public class LedViewModel : Screen, IDisposable
     {
         public static Color SelectedColor = Color.FromRgb(237, 65, 131);
         public static Color HoverColor = Color.FromRgb(116, 97, 167);
         public static Color UnselectedColor = Color.FromRgb(62, 180, 203);
 
+        // Pre-frozen brushes to avoid creating new objects on every hover/selection
+        private static readonly SolidColorBrush SelectedBorderBrush = CreateFrozenBrush(SelectedColor);
+        private static readonly SolidColorBrush SelectedFillBrush = CreateFrozenBrush(Color.FromArgb(64, SelectedColor.R, SelectedColor.G, SelectedColor.B));
+        private static readonly SolidColorBrush HoverBorderBrush = CreateFrozenBrush(HoverColor);
+        private static readonly SolidColorBrush HoverFillBrush = CreateFrozenBrush(Color.FromArgb(64, HoverColor.R, HoverColor.G, HoverColor.B));
+        private static readonly SolidColorBrush UnselectedBorderBrush = CreateFrozenBrush(UnselectedColor);
+        private static readonly SolidColorBrush UnselectedFillBrush = CreateFrozenBrush(Color.FromArgb(64, UnselectedColor.R, UnselectedColor.G, UnselectedColor.B));
+
+        private static SolidColorBrush CreateFrozenBrush(Color color)
+        {
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            return brush;
+        }
+
         private readonly DeviceLayoutViewModel _layoutViewModel;
         private readonly IWindowManager _windowManager;
         private FileSystemWatcher _fileWatcher;
         private LayoutCustomLedDataLogicalLayout _logicalLayout;
+        private BitmapImage _cachedLedImage;
+        private string _cachedLedImagePath;
 
         public LedViewModel(LayoutEditModel model, DeviceLayoutViewModel layoutViewModel, IWindowManager windowManager, LedLayout ledLayout)
         {
@@ -81,12 +98,19 @@ namespace LayoutEditor.UI.Controls
                 if (!File.Exists(fileUri.LocalPath))
                     return DependencyProperty.UnsetValue;
 
+                if (_cachedLedImage != null && _cachedLedImagePath == fileUri.LocalPath)
+                    return _cachedLedImage;
+
                 var image = new BitmapImage();
                 image.BeginInit();
                 image.CacheOption = BitmapCacheOption.OnLoad;
                 image.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
                 image.UriSource = fileUri;
                 image.EndInit();
+                image.Freeze();
+
+                _cachedLedImage = image;
+                _cachedLedImagePath = fileUri.LocalPath;
                 return image;
             }
         }
@@ -116,9 +140,16 @@ namespace LayoutEditor.UI.Controls
         public void Update()
         {
             ApplyLogicalLayout();
-            UpdateAvailableLedIds();
+            // Only populate available IDs for the selected LED to avoid massive memory use
+            if (Selected)
+                UpdateAvailableLedIds();
             PopulateInput();
             CreateLedGeometry();
+        }
+
+        public void RefreshAvailableLedIds()
+        {
+            UpdateAvailableLedIds();
         }
 
         public void SelectImage()
@@ -138,11 +169,32 @@ namespace LayoutEditor.UI.Controls
 
         public void SetColor(Color borderColor, Color? fillColor = null)
         {
-            if (fillColor == null)
-                fillColor = Color.FromArgb(64, borderColor.R, borderColor.G, borderColor.B);
-
-            BorderBrush = new SolidColorBrush(borderColor);
-            FillBrush = new SolidColorBrush(fillColor.Value);
+            if (borderColor == SelectedColor)
+            {
+                BorderBrush = SelectedBorderBrush;
+                FillBrush = SelectedFillBrush;
+            }
+            else if (borderColor == HoverColor)
+            {
+                BorderBrush = HoverBorderBrush;
+                FillBrush = HoverFillBrush;
+            }
+            else if (borderColor == UnselectedColor)
+            {
+                BorderBrush = UnselectedBorderBrush;
+                FillBrush = UnselectedFillBrush;
+            }
+            else
+            {
+                if (fillColor == null)
+                    fillColor = Color.FromArgb(64, borderColor.R, borderColor.G, borderColor.B);
+                var border = new SolidColorBrush(borderColor);
+                border.Freeze();
+                var fill = new SolidColorBrush(fillColor.Value);
+                fill.Freeze();
+                BorderBrush = border;
+                FillBrush = fill;
+            }
         }
 
         public void StartShapeEdit()
@@ -236,45 +288,22 @@ namespace LayoutEditor.UI.Controls
             return result;
         }
 
-        public void MouseUp(object sender, MouseEventArgs e)
-        {
-            _layoutViewModel.SelectLed(this);
-
-            if (ShapeEditor != null)
-            {
-                var percentagePosition = GetPercentagePosition(e.GetPosition((IInputElement) sender));
-                ShapeEditor.Click(percentagePosition);
-                CreateLedGeometry();
-            }
-        }
-
-        public void MouseMove(object sender, MouseEventArgs e)
-        {
-            if (ShapeEditor != null)
-            {
-                var percentagePosition = GetPercentagePosition(e.GetPosition((IInputElement) sender));
-                ShapeEditor.Move(percentagePosition);
-                CreateLedGeometry();
-            }
-        }
-
-        public void MouseEnter()
-        {
-            if (!Selected)
-                SetColor(HoverColor);
-        }
-
-        public void MouseLeave()
-        {
-            if (!Selected)
-                SetColor(UnselectedColor);
-        }
+        // Mouse handling is done by LayoutCanvas directly
 
         protected override void OnClose()
         {
-            if (_fileWatcher != null)
-                _fileWatcher.Changed -= FileWatcherOnChanged;
+            Dispose();
             base.OnClose();
+        }
+
+        public void Dispose()
+        {
+            if (_fileWatcher != null)
+            {
+                _fileWatcher.Changed -= FileWatcherOnChanged;
+                _fileWatcher.Dispose();
+                _fileWatcher = null;
+            }
         }
 
         private void ApplyLogicalLayout()
@@ -297,27 +326,45 @@ namespace LayoutEditor.UI.Controls
             }
 
             InputImage = Path.GetFileName(_logicalLayout.Image);
+            _cachedLedImage = null;
+            _cachedLedImagePath = null;
             NotifyOfPropertyChange(nameof(LedImage));
 
-            var filePath = new Uri(new Uri(Model.FilePath), _logicalLayout.Image).LocalPath;
+            // Dispose old watcher before creating a new one
             if (_fileWatcher != null)
             {
                 _fileWatcher.Changed -= FileWatcherOnChanged;
+                _fileWatcher.Dispose();
                 _fileWatcher = null;
             }
 
-            if (!Directory.Exists(Path.GetDirectoryName(filePath)))
+            // Only create a file watcher if there's actually an image to watch
+            if (string.IsNullOrWhiteSpace(_logicalLayout.Image))
                 return;
-            _fileWatcher = new FileSystemWatcher(Path.GetDirectoryName(filePath)!, Path.GetFileName(filePath)!)
+
+            try
             {
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Attributes | NotifyFilters.CreationTime | NotifyFilters.FileName | NotifyFilters.Size,
-                EnableRaisingEvents = true
-            };
-            _fileWatcher.Changed += FileWatcherOnChanged;
+                var filePath = new Uri(new Uri(Model.FilePath), _logicalLayout.Image).LocalPath;
+                var dir = Path.GetDirectoryName(filePath);
+                if (dir == null || !Directory.Exists(dir))
+                    return;
+                _fileWatcher = new FileSystemWatcher(dir, Path.GetFileName(filePath)!)
+                {
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Attributes | NotifyFilters.CreationTime | NotifyFilters.FileName | NotifyFilters.Size,
+                    EnableRaisingEvents = true
+                };
+                _fileWatcher.Changed += FileWatcherOnChanged;
+            }
+            catch (Exception)
+            {
+                // Invalid URI or path - skip watcher
+            }
         }
 
         private void FileWatcherOnChanged(object sender, FileSystemEventArgs e)
         {
+            _cachedLedImage = null;
+            _cachedLedImagePath = null;
             NotifyOfPropertyChange(nameof(LedImage));
         }
 
@@ -329,15 +376,9 @@ namespace LayoutEditor.UI.Controls
 
         private void PopulateInput()
         {
-            if (int.TryParse(LedLayout.Id, out int numericLedId))
-            {
-                InputId = LedLayout.Id;
-            }
-            else
-            {
-                var ledId = AvailableLedIds.FirstOrDefault(l => l.Equals(LedLayout.Id));
-                InputId = ledId ?? throw new Exception($"Failed to find LED ID {LedLayout.Id}, the layout editor may need an update.");
-            }
+            // Use the LED's current ID directly - validation happens when the user
+            // selects the LED and AvailableLedIds gets populated
+            InputId = LedLayout.Id;
 
             InputShape = LedLayout.Shape;
             InputShapeData = LedLayout.ShapeData;
