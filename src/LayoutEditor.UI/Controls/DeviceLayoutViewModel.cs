@@ -29,6 +29,25 @@ namespace LayoutEditor.UI.Controls
 
         public void UpdateLeds()
         {
+            RecalcLayoutValues();
+            foreach (var ledViewModel in Items)
+                ledViewModel.Update();
+        }
+
+        /// <summary>
+        /// Lightweight recalc: only recomputes layout positions/sizes from descriptive values
+        /// and refreshes Input* fields. Skips expensive ApplyLogicalLayout and CreateLedGeometry.
+        /// Use this for drag/resize/nudge operations where the canvas renders directly.
+        /// </summary>
+        public void RecalcLeds()
+        {
+            RecalcLayoutValues();
+            foreach (var ledViewModel in Items)
+                ledViewModel.PopulateInputOnly();
+        }
+
+        private void RecalcLayoutValues()
+        {
             if (DeviceLayout.Leds != null)
             {
                 LedLayout lastLed = null;
@@ -39,15 +58,39 @@ namespace LayoutEditor.UI.Controls
                     lastLed = led;
                 }
             }
-
-            foreach (var ledViewModel in Items)
-                ledViewModel.Update();
         }
 
         public void ApplyLed()
         {
-            SelectedLed?.ApplyInput();
+            if (SelectedLed == null) return;
+
+            var canvas = GetCanvas();
+            if (canvas != null && canvas.SelectedLeds.Count > 1)
+            {
+                // Batch: set width/height on all selected, then one UpdateLeds()
+                foreach (var led in canvas.SelectedLeds)
+                {
+                    led.InputWidth = SelectedLed.InputWidth;
+                    led.InputHeight = SelectedLed.InputHeight;
+                    led.ApplyInputWithoutUpdate();
+                }
+                RecalcLeds();
+            }
+            else
+            {
+                SelectedLed.ApplyInputWithoutUpdate();
+                RecalcLeds();
+            }
         }
+
+        private LayoutCanvas GetCanvas()
+        {
+            // Walk visual tree to find the LayoutCanvas - used for multi-select operations
+            return _canvas;
+        }
+
+        private LayoutCanvas _canvas;
+        public void SetCanvas(LayoutCanvas canvas) => _canvas = canvas;
 
         public void AddLed(string addBefore)
         {

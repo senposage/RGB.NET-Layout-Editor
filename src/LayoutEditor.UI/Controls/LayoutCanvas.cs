@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -36,7 +37,7 @@ namespace LayoutEditor.UI.Controls
 
         public static readonly DependencyProperty GridSizeProperty =
             DependencyProperty.Register(nameof(GridSize), typeof(double), typeof(LayoutCanvas),
-                new FrameworkPropertyMetadata(5.0, FrameworkPropertyMetadataOptions.AffectsRender));
+                new FrameworkPropertyMetadata(0.5, FrameworkPropertyMetadataOptions.AffectsRender));
 
         public static readonly DependencyProperty SnapToGridProperty =
             DependencyProperty.Register(nameof(SnapToGrid), typeof(bool), typeof(LayoutCanvas),
@@ -48,7 +49,17 @@ namespace LayoutEditor.UI.Controls
 
         public static readonly DependencyProperty SnapThresholdProperty =
             DependencyProperty.Register(nameof(SnapThreshold), typeof(double), typeof(LayoutCanvas),
-                new PropertyMetadata(2.0));
+                new PropertyMetadata(0.5, null, CoerceSnapThreshold));
+
+        private static object CoerceSnapThreshold(DependencyObject d, object value)
+        {
+            var v = (double)value;
+            return v < 0.01 ? 0.01 : v;
+        }
+
+        public static readonly DependencyProperty GridColorProperty =
+            DependencyProperty.Register(nameof(GridColor), typeof(Color), typeof(LayoutCanvas),
+                new FrameworkPropertyMetadata(Color.FromArgb(96, 0, 0, 0), FrameworkPropertyMetadataOptions.AffectsRender));
 
         public ImageSource DeviceImageSource
         {
@@ -98,6 +109,12 @@ namespace LayoutEditor.UI.Controls
             set => SetValue(SnapThresholdProperty, value);
         }
 
+        public Color GridColor
+        {
+            get => (Color)GetValue(GridColorProperty);
+            set => SetValue(GridColorProperty, value);
+        }
+
         #endregion
 
         #region State
@@ -123,7 +140,6 @@ namespace LayoutEditor.UI.Controls
 
         #region Brushes (static, frozen)
 
-        private static readonly Pen GridPen;
         private static readonly Pen GuidePen;
         private static readonly Pen SelectedBorderPen;
         private static readonly Pen HoverBorderPen;
@@ -135,9 +151,6 @@ namespace LayoutEditor.UI.Controls
 
         static LayoutCanvas()
         {
-            GridPen = new Pen(new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)), 0.5);
-            GridPen.Freeze();
-
             GuidePen = new Pen(new SolidColorBrush(Color.FromArgb(200, 0, 255, 0)), 0.5) { DashStyle = DashStyles.Dash };
             GuidePen.Freeze();
 
@@ -217,10 +230,35 @@ namespace LayoutEditor.UI.Controls
             // Grid
             if (ShowGrid && GridSize > 0)
             {
-                for (double x = 0; x <= LayoutWidth; x += GridSize)
-                    dc.DrawLine(GridPen, new Point(x, 0), new Point(x, LayoutHeight));
-                for (double y = 0; y <= LayoutHeight; y += GridSize)
-                    dc.DrawLine(GridPen, new Point(0, y), new Point(LayoutWidth, y));
+                var screenGridSize = GridSize * _zoom;
+                // Major lines every 10 grid steps
+                var majorStep = GridSize * 10;
+
+                // Minor grid: only draw if screen pixels per cell >= 4 (readable)
+                if (screenGridSize >= 4)
+                {
+                    var minorColor = Color.FromArgb((byte)(GridColor.A / 2), GridColor.R, GridColor.G, GridColor.B);
+                    var minorPen = new Pen(new SolidColorBrush(minorColor), 0.3);
+                    minorPen.Freeze();
+                    for (double x = 0; x <= LayoutWidth; x += GridSize)
+                    {
+                        if (Math.Abs(x % majorStep) > GridSize * 0.1)
+                            dc.DrawLine(minorPen, new Point(x, 0), new Point(x, LayoutHeight));
+                    }
+                    for (double y = 0; y <= LayoutHeight; y += GridSize)
+                    {
+                        if (Math.Abs(y % majorStep) > GridSize * 0.1)
+                            dc.DrawLine(minorPen, new Point(0, y), new Point(LayoutWidth, y));
+                    }
+                }
+
+                // Major grid: always draw (every 10 steps)
+                var majorPen = new Pen(new SolidColorBrush(GridColor), 0.7);
+                majorPen.Freeze();
+                for (double x = 0; x <= LayoutWidth; x += majorStep)
+                    dc.DrawLine(majorPen, new Point(x, 0), new Point(x, LayoutHeight));
+                for (double y = 0; y <= LayoutHeight; y += majorStep)
+                    dc.DrawLine(majorPen, new Point(0, y), new Point(LayoutWidth, y));
             }
 
             // LEDs
@@ -337,6 +375,9 @@ namespace LayoutEditor.UI.Controls
                     AddToSelection(hitLed);
                 }
 
+                // Save undo state before drag
+                SaveUndoForSelected();
+
                 // Start drag
                 _isDraggingLed = true;
                 _dragOffset = new Point(layoutPos.X - hitLed.LedLayout.X, layoutPos.Y - hitLed.LedLayout.Y);
@@ -403,8 +444,9 @@ namespace LayoutEditor.UI.Controls
                     }
                 }
 
-                targetX = Math.Round(targetX, 1);
-                targetY = Math.Round(targetY, 1);
+                var precision = GetRoundingPrecision();
+                targetX = Math.Round(targetX, precision);
+                targetY = Math.Round(targetY, precision);
 
                 // Move all selected LEDs by the same delta
                 var dx = targetX - SelectedLed.LedLayout.X;
@@ -412,12 +454,13 @@ namespace LayoutEditor.UI.Controls
 
                 foreach (var led in SelectedLeds)
                 {
-                    var nx = Math.Round(led.LedLayout.X + dx, 1);
-                    var ny = Math.Round(led.LedLayout.Y + dy, 1);
+                    var nx = Math.Round(led.LedLayout.X + dx, precision);
+                    var ny = Math.Round(led.LedLayout.Y + dy, precision);
                     led.InputX = nx.ToString(CultureInfo.InvariantCulture);
                     led.InputY = ny.ToString(CultureInfo.InvariantCulture);
-                    led.ApplyInput();
+                    led.ApplyInputWithoutUpdate();
                 }
+                _viewModel?.RecalcLeds();
 
                 InvalidateVisual();
             }
@@ -460,6 +503,105 @@ namespace LayoutEditor.UI.Controls
             e.Handled = true;
         }
 
+        protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
+        {
+            base.OnMouseRightButtonUp(e);
+            if (_viewModel == null) return;
+
+            var layoutPos = ScreenToLayout(e.GetPosition(this));
+            var hitLed = HitTestLed(layoutPos);
+
+            var menu = new ContextMenu();
+
+            if (hitLed != null)
+            {
+                // Select this LED if not already selected
+                if (!hitLed.Selected)
+                {
+                    ClearSelection();
+                    AddToSelection(hitLed);
+                }
+
+                // Rename LED
+                var renameItem = new MenuItem { Header = $"Rename '{hitLed.LedLayout.Id}'..." };
+                renameItem.Click += (_, _) =>
+                {
+                    var dlg = new Dialogs.RenameDialog(hitLed.LedLayout.Id);
+                    if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.NewName))
+                    {
+                        hitLed.InputId = dlg.NewName;
+                        hitLed.ApplyInput();
+                        InvalidateVisual();
+                        SelectionChanged?.Invoke();
+                    }
+                };
+                menu.Items.Add(renameItem);
+
+                // Delete LED
+                var deleteItem = new MenuItem { Header = "Delete LED", InputGestureText = "Del" };
+                deleteItem.Click += (_, _) =>
+                {
+                    _viewModel.RemoveLed();
+                    InvalidateVisual();
+                };
+                menu.Items.Add(deleteItem);
+
+                menu.Items.Add(new Separator());
+
+                // Snap to grid (works for single or multi)
+                if (GridSize > 0)
+                {
+                    var snapItem = new MenuItem { Header = "Snap to grid" };
+                    snapItem.Click += (_, _) => SnapSelectedToGrid();
+                    menu.Items.Add(snapItem);
+                }
+
+                // Multi-select operations
+                if (SelectedLeds.Count > 1)
+                {
+                    var spaceH = new MenuItem { Header = "Space evenly (horizontal)", InputGestureText = "Ctrl+H" };
+                    spaceH.Click += (_, _) => AutoSpaceHorizontal();
+                    menu.Items.Add(spaceH);
+
+                    var spaceV = new MenuItem { Header = "Space evenly (vertical)", InputGestureText = "Ctrl+J" };
+                    spaceV.Click += (_, _) => AutoSpaceVertical();
+                    menu.Items.Add(spaceV);
+
+                    menu.Items.Add(new Separator());
+                }
+            }
+
+            // Add LED options
+            var addBefore = new MenuItem { Header = "Add LED before" };
+            addBefore.Click += (_, _) => _viewModel.AddLed("True");
+            menu.Items.Add(addBefore);
+
+            var addAfter = new MenuItem { Header = "Add LED after" };
+            addAfter.Click += (_, _) => _viewModel.AddLed("False");
+            menu.Items.Add(addAfter);
+
+            if (_undoStack.Count > 0 || _redoStack.Count > 0)
+            {
+                menu.Items.Add(new Separator());
+                if (_undoStack.Count > 0)
+                {
+                    var undoItem = new MenuItem { Header = "Undo", InputGestureText = "Ctrl+Z" };
+                    undoItem.Click += (_, _) => Undo();
+                    menu.Items.Add(undoItem);
+                }
+                if (_redoStack.Count > 0)
+                {
+                    var redoItem = new MenuItem { Header = "Redo", InputGestureText = "Ctrl+Y" };
+                    redoItem.Click += (_, _) => Redo();
+                    menu.Items.Add(redoItem);
+                }
+            }
+
+            menu.IsOpen = true;
+            ContextMenu = menu;
+            e.Handled = true;
+        }
+
         protected override void OnMouseWheel(MouseWheelEventArgs e)
         {
             base.OnMouseWheel(e);
@@ -495,6 +637,26 @@ namespace LayoutEditor.UI.Controls
                 ShowGrid = !ShowGrid;
                 e.Handled = true;
             }
+            else if (e.Key == Key.Z && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            {
+                Undo();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Y && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            {
+                Redo();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.H && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            {
+                AutoSpaceHorizontal();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.J && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            {
+                AutoSpaceVertical();
+                e.Handled = true;
+            }
             else if (e.Key == Key.Delete && SelectedLed != null)
             {
                 _viewModel?.RemoveLed();
@@ -515,10 +677,12 @@ namespace LayoutEditor.UI.Controls
                         case Key.Up: y -= nudge; break;
                         case Key.Down: y += nudge; break;
                     }
-                    led.InputX = Math.Round(x, 1).ToString(CultureInfo.InvariantCulture);
-                    led.InputY = Math.Round(y, 1).ToString(CultureInfo.InvariantCulture);
-                    led.ApplyInput();
+                    var precision = GetRoundingPrecision();
+                    led.InputX = Math.Round(x, precision).ToString(CultureInfo.InvariantCulture);
+                    led.InputY = Math.Round(y, precision).ToString(CultureInfo.InvariantCulture);
+                    led.ApplyInputWithoutUpdate();
                 }
+                _viewModel?.RecalcLeds();
                 InvalidateVisual();
                 SelectionChanged?.Invoke();
                 e.Handled = true;
@@ -544,7 +708,9 @@ namespace LayoutEditor.UI.Controls
             led.Selected = true;
             SelectedLeds.Add(led);
             SelectedLed = led;
-            led.RefreshAvailableLedIds();
+            // Only populate the expensive LED ID list for single selection
+            if (SelectedLeds.Count == 1)
+                led.RefreshAvailableLedIds();
             SelectionChanged?.Invoke();
             InvalidateVisual();
         }
@@ -562,7 +728,6 @@ namespace LayoutEditor.UI.Controls
                 led.Selected = true;
                 SelectedLeds.Add(led);
                 SelectedLed = led;
-                led.RefreshAvailableLedIds();
             }
             SelectionChanged?.Invoke();
             InvalidateVisual();
@@ -574,5 +739,171 @@ namespace LayoutEditor.UI.Controls
         {
             InvalidateVisual();
         }
+
+        private int GetRoundingPrecision()
+        {
+            if (GridSize <= 0) return 2;
+            var s = GridSize.ToString(CultureInfo.InvariantCulture);
+            var dotIndex = s.IndexOf('.');
+            return dotIndex < 0 ? 0 : s.Length - dotIndex - 1;
+        }
+
+        #region Undo / Redo
+
+        private readonly Stack<UndoEntry> _undoStack = new();
+        private readonly Stack<UndoEntry> _redoStack = new();
+
+        private struct UndoEntry
+        {
+            public LedViewModel Led;
+            public float OldX, OldY, OldW, OldH;
+            public float NewX, NewY, NewW, NewH;
+        }
+
+        public void PushUndo(List<(LedViewModel led, float oldX, float oldY, float oldW, float oldH)> entries)
+        {
+            _redoStack.Clear();
+            foreach (var (led, oldX, oldY, oldW, oldH) in entries)
+            {
+                _undoStack.Push(new UndoEntry
+                {
+                    Led = led,
+                    OldX = oldX, OldY = oldY, OldW = oldW, OldH = oldH,
+                    NewX = led.LedLayout.X, NewY = led.LedLayout.Y,
+                    NewW = led.LedLayout.Width, NewH = led.LedLayout.Height
+                });
+            }
+        }
+
+        public void UndoPublic() => Undo();
+        public void RedoPublic() => Redo();
+
+        private void Undo()
+        {
+            if (_undoStack.Count == 0) return;
+            var entry = _undoStack.Pop();
+            _redoStack.Push(entry);
+            entry.Led.InputX = entry.OldX.ToString(CultureInfo.InvariantCulture);
+            entry.Led.InputY = entry.OldY.ToString(CultureInfo.InvariantCulture);
+            entry.Led.InputWidth = entry.OldW.ToString(CultureInfo.InvariantCulture);
+            entry.Led.InputHeight = entry.OldH.ToString(CultureInfo.InvariantCulture);
+            entry.Led.ApplyInputWithoutUpdate();
+            _viewModel?.RecalcLeds();
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        private void Redo()
+        {
+            if (_redoStack.Count == 0) return;
+            var entry = _redoStack.Pop();
+            _undoStack.Push(entry);
+            entry.Led.InputX = entry.NewX.ToString(CultureInfo.InvariantCulture);
+            entry.Led.InputY = entry.NewY.ToString(CultureInfo.InvariantCulture);
+            entry.Led.InputWidth = entry.NewW.ToString(CultureInfo.InvariantCulture);
+            entry.Led.InputHeight = entry.NewH.ToString(CultureInfo.InvariantCulture);
+            entry.Led.ApplyInputWithoutUpdate();
+            _viewModel?.RecalcLeds();
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        #endregion
+
+        #region Auto Spacing
+
+        /// <summary>
+        /// Distribute selected LEDs evenly in a horizontal row (even X spacing, same Y).
+        /// </summary>
+        public void AutoSpaceHorizontal()
+        {
+            if (SelectedLeds.Count < 2) return;
+            var precision = GetRoundingPrecision();
+            var sorted = SelectedLeds.OrderBy(l => l.LedLayout.X).ToList();
+
+            // Save undo
+            SaveUndoForSelected();
+
+            // Distribute: keep first and last positions, space others evenly
+            var first = sorted[0];
+            var last = sorted[^1];
+            var totalSpan = (last.LedLayout.X + last.LedLayout.Width) - first.LedLayout.X;
+            var totalLedWidth = sorted.Sum(l => l.LedLayout.Width);
+            var gap = (totalSpan - totalLedWidth) / (sorted.Count - 1);
+
+            var currentX = (double)first.LedLayout.X;
+            foreach (var led in sorted)
+            {
+                led.InputX = Math.Round(currentX, precision).ToString(CultureInfo.InvariantCulture);
+                led.ApplyInputWithoutUpdate();
+                currentX += led.LedLayout.Width + gap;
+            }
+            _viewModel?.RecalcLeds();
+
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        /// <summary>
+        /// Distribute selected LEDs evenly in a vertical column (even Y spacing, same X).
+        /// </summary>
+        public void AutoSpaceVertical()
+        {
+            if (SelectedLeds.Count < 2) return;
+            var precision = GetRoundingPrecision();
+            var sorted = SelectedLeds.OrderBy(l => l.LedLayout.Y).ToList();
+
+            SaveUndoForSelected();
+
+            var first = sorted[0];
+            var last = sorted[^1];
+            var totalSpan = (last.LedLayout.Y + last.LedLayout.Height) - first.LedLayout.Y;
+            var totalLedHeight = sorted.Sum(l => l.LedLayout.Height);
+            var gap = (totalSpan - totalLedHeight) / (sorted.Count - 1);
+
+            var currentY = (double)first.LedLayout.Y;
+            foreach (var led in sorted)
+            {
+                led.InputY = Math.Round(currentY, precision).ToString(CultureInfo.InvariantCulture);
+                led.ApplyInputWithoutUpdate();
+                currentY += led.LedLayout.Height + gap;
+            }
+            _viewModel?.RecalcLeds();
+
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        /// <summary>
+        /// Snap all selected LEDs to the nearest grid intersection.
+        /// </summary>
+        public void SnapSelectedToGrid()
+        {
+            if (SelectedLeds.Count == 0 || GridSize <= 0) return;
+            var precision = GetRoundingPrecision();
+
+            SaveUndoForSelected();
+
+            foreach (var led in SelectedLeds)
+            {
+                var snappedX = Math.Round(Math.Round(led.LedLayout.X / GridSize) * GridSize, precision);
+                var snappedY = Math.Round(Math.Round(led.LedLayout.Y / GridSize) * GridSize, precision);
+                led.InputX = snappedX.ToString(CultureInfo.InvariantCulture);
+                led.InputY = snappedY.ToString(CultureInfo.InvariantCulture);
+                led.ApplyInputWithoutUpdate();
+            }
+            _viewModel?.RecalcLeds();
+
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        private void SaveUndoForSelected()
+        {
+            var entries = SelectedLeds.Select(l => (l, l.LedLayout.X, l.LedLayout.Y, l.LedLayout.Width, l.LedLayout.Height)).ToList();
+            PushUndo(entries);
+        }
+
+        #endregion
     }
 }

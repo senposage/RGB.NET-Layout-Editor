@@ -26,6 +26,7 @@
             <DockPanel VerticalAlignment="Top">
                 <Menu DockPanel.Dock="Top" Background="White" BorderBrush="#FF535353">
                     <MenuItem Header="_File">
+                        <MenuItem Command="{s:Action QuickSave}" Header="_Save" InputGestureText="Ctrl+S" />
                         <MenuItem Command="{s:Action Save}" Header="_Export layout..." />
                         <Separator />
                         <MenuItem Command="{s:Action NewLayout}" Header="_New layout" />

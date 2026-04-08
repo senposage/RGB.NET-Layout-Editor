@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace LayoutEditor.UI.Controls
 {
@@ -16,6 +17,7 @@ namespace LayoutEditor.UI.Controls
             if (DataContext is DeviceLayoutViewModel vm)
             {
                 Canvas.SetViewModel(vm);
+                vm.SetCanvas(Canvas);
 
                 Canvas.SelectionChanged += () =>
                 {
@@ -51,6 +53,24 @@ namespace LayoutEditor.UI.Controls
                 SelectedIdText.Text = "None";
                 SelectedPosText.Text = "-";
                 SelectedSizeText.Text = "-";
+            }
+        }
+
+        private void AutoSpaceH_Click(object sender, RoutedEventArgs e) => Canvas.AutoSpaceHorizontal();
+        private void AutoSpaceV_Click(object sender, RoutedEventArgs e) => Canvas.AutoSpaceVertical();
+        private void Undo_Click(object sender, RoutedEventArgs e) => Canvas.UndoPublic();
+        private void Redo_Click(object sender, RoutedEventArgs e) => Canvas.RedoPublic();
+
+        private void GridColorCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is ComboBox combo && combo.SelectedItem is ComboBoxItem item && item.Tag is string colorStr)
+            {
+                try
+                {
+                    var color = (Color)ColorConverter.ConvertFromString(colorStr);
+                    Canvas.GridColor = color;
+                }
+                catch { }
             }
         }
     }

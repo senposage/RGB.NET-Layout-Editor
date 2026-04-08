@@ -62,12 +62,30 @@
                         <CheckBox Content="Snap Neighbors" IsChecked="{Binding ElementName=Canvas, Path=SnapToNeighbors}" Margin="0,0,10,4" />
                         <CheckBox Content="Show Grid" IsChecked="{Binding ElementName=Canvas, Path=ShowGrid}" Margin="0,0,10,4" />
                     </WrapPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <TextBlock Text="Grid size:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                        <TextBox Width="40" Height="22" Text="{Binding ElementName=Canvas, Path=GridSize, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                        <TextBox Width="50" Height="22" Text="{Binding ElementName=Canvas, Path=GridSize, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center" />
                         <TextBlock Text="mm" VerticalAlignment="Center" Margin="3,0,10,0" />
                         <TextBlock Text="Snap dist:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                        <TextBox Width="40" Height="22" Text="{Binding ElementName=Canvas, Path=SnapThreshold, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                        <TextBox Width="50" Height="22" Text="{Binding ElementName=Canvas, Path=SnapThreshold, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="Grid color:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <ComboBox Width="90" Height="22" x:Name="GridColorCombo" SelectionChanged="GridColorCombo_SelectionChanged" SelectedIndex="2">
+                            <ComboBoxItem Content="White (dim)" Tag="#33FFFFFF" />
+                            <ComboBoxItem Content="White (bright)" Tag="#80FFFFFF" />
+                            <ComboBoxItem Content="Black" Tag="#60000000" />
+                            <ComboBoxItem Content="Cyan" Tag="#80009999" />
+                            <ComboBoxItem Content="Yellow" Tag="#80999900" />
+                            <ComboBoxItem Content="Red" Tag="#80993333" />
+                        </ComboBox>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <Button Content="Space H" Click="AutoSpaceH_Click" Padding="8,2" Margin="0,0,4,0" ToolTip="Distribute selected LEDs evenly horizontally (Ctrl+H)" />
+                        <Button Content="Space V" Click="AutoSpaceV_Click" Padding="8,2" Margin="0,0,4,0" ToolTip="Distribute selected LEDs evenly vertically (Ctrl+J)" />
+                        <Button Content="Undo" Click="Undo_Click" Padding="8,2" Margin="0,0,4,0" ToolTip="Ctrl+Z" />
+                        <Button Content="Redo" Click="Redo_Click" Padding="8,2" ToolTip="Ctrl+Y" />
                     </StackPanel>
 
                     <Separator Margin="0,2,0,6" />
@@ -158,7 +176,12 @@
                         <Run FontWeight="Bold">Escape</Run> deselect all<LineBreak/>
                         <Run FontWeight="Bold">G</Run> toggle grid<LineBreak/>
                         <Run FontWeight="Bold">Scroll</Run> zoom<LineBreak/>
-                        <Run FontWeight="Bold">Drag background</Run> pan
+                        <Run FontWeight="Bold">Drag background</Run> pan<LineBreak/>
+                        <Run FontWeight="Bold">Ctrl+Z</Run> undo<LineBreak/>
+                        <Run FontWeight="Bold">Ctrl+Y</Run> redo<LineBreak/>
+                        <Run FontWeight="Bold">Ctrl+H</Run> auto-space horizontal<LineBreak/>
+                        <Run FontWeight="Bold">Ctrl+J</Run> auto-space vertical<LineBreak/>
+                        <Run FontWeight="Bold">Right-click</Run> context menu
                     </TextBlock>
                 </StackPanel>
             </ScrollViewer>

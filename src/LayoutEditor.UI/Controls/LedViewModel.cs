@@ -121,6 +121,16 @@ namespace LayoutEditor.UI.Controls
 
         public void ApplyInput()
         {
+            ApplyInputWithoutUpdate();
+            _layoutViewModel.RecalcLeds();
+        }
+
+        /// <summary>
+        /// Writes Input* fields to the LedLayout without triggering a full UpdateLeds().
+        /// Call _layoutViewModel.UpdateLeds() once after a batch of these.
+        /// </summary>
+        public void ApplyInputWithoutUpdate()
+        {
             LedLayout.Id = InputId;
             LedLayout.DescriptiveX = InputX;
             LedLayout.DescriptiveY = InputY;
@@ -132,19 +142,22 @@ namespace LayoutEditor.UI.Controls
                 LedLayout.DescriptiveShape = InputShapeData;
             else
                 LedLayout.DescriptiveShape = InputShape.ToString();
-
-            // If LED image exists, update it
-            _layoutViewModel.UpdateLeds();
         }
 
         public void Update()
         {
             ApplyLogicalLayout();
-            // Only populate available IDs for the selected LED to avoid massive memory use
-            if (Selected)
-                UpdateAvailableLedIds();
             PopulateInput();
             CreateLedGeometry();
+        }
+
+        /// <summary>
+        /// Lightweight update: only refreshes Input* fields from current layout values.
+        /// No file watchers, no geometry rebuild — for use when canvas renders directly.
+        /// </summary>
+        public void PopulateInputOnly()
+        {
+            PopulateInput();
         }
 
         public void RefreshAvailableLedIds()

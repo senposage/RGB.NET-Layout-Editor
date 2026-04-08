@@ -155,6 +155,48 @@ namespace LayoutEditor.UI.Pages
                 _shellViewModel.Reset();
         }
 
+        public void QuickSave()
+        {
+            try
+            {
+                var backupDir = Path.Combine(Path.GetDirectoryName(Model.FilePath)!, ".layout-backups");
+                Directory.CreateDirectory(backupDir);
+                var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                var baseName = Path.GetFileNameWithoutExtension(Model.FilePath);
+
+                // Pre-save backup (copy current file on disk)
+                if (File.Exists(Model.FilePath))
+                {
+                    var prePath = Path.Combine(backupDir, $"{baseName}_pre_{timestamp}.xml");
+                    File.Copy(Model.FilePath, prePath, true);
+                }
+
+                // Save
+                XmlSerializer serializer = new(typeof(DeviceLayout));
+                using (var fs = File.Create(Model.FilePath))
+                using (StreamWriter writer = new(fs))
+                    serializer.Serialize(writer, DeviceLayout);
+
+                // Post-save backup (copy what we just wrote)
+                var postPath = Path.Combine(backupDir, $"{baseName}_post_{timestamp}.xml");
+                File.Copy(Model.FilePath, postPath, true);
+
+                // Clean up old backups (keep last 20)
+                var backups = Directory.GetFiles(backupDir, $"{baseName}_*.xml")
+                    .OrderByDescending(f => f)
+                    .Skip(20)
+                    .ToArray();
+                foreach (var old in backups)
+                    File.Delete(old);
+
+                _windowManager.ShowMessageBox($"Saved to {Model.FilePath}\nBackup: {backupDir}", "Saved");
+            }
+            catch (Exception ex)
+            {
+                _windowManager.ShowMessageBox("Failed to save: " + ex.Message, "Error");
+            }
+        }
+
         public async Task Save()
         {
             _windowManager.ShowMessageBox("Select a target directory in which to save your layout, a directory structure and XML file will be created automatically");
