@@ -28,6 +28,11 @@ namespace LayoutEditor.UI.Pages
         private BitmapImage _cachedDeviceImage;
         private string _cachedDeviceImagePath;
 
+        /// <summary>
+        /// Fired when the device image changes (bypasses Fody PropertyChanged weaving).
+        /// </summary>
+        public event Action DeviceImageChanged;
+
         public DeviceLayoutEditorViewModel(LayoutEditModel model, ShellViewModel shellViewModel, IWindowManager windowManager)
         {
             _shellViewModel = shellViewModel;
@@ -107,6 +112,12 @@ namespace LayoutEditor.UI.Pages
             }
         }
 
+        /// <summary>
+        /// Absolute path to the device image file on disk (for runtime rendering).
+        /// May differ from the relative path stored in LayoutCustomDeviceData.DeviceImage.
+        /// </summary>
+        public string AbsoluteDeviceImagePath { get; private set; }
+
         public void SelectDeviceImage()
         {
             VistaOpenFileDialog dialog = new();
@@ -115,8 +126,27 @@ namespace LayoutEditor.UI.Pages
             if (dialog.ShowDialog() == false)
                 return;
 
-            var relativePath = new Uri(Path.GetDirectoryName(Model.FilePath) + "/").MakeRelativeUri(new Uri(dialog.FileName));
-            LayoutCustomDeviceData.DeviceImage = HttpUtility.UrlDecode(relativePath.OriginalString);
+            // Store absolute path for runtime use
+            AbsoluteDeviceImagePath = dialog.FileName;
+
+            // Store relative path for XML serialization (if same drive)
+            try
+            {
+                var baseUri = new Uri(Path.GetDirectoryName(Model.FilePath) + "/");
+                var fileUri = new Uri(dialog.FileName);
+                var relativePath = baseUri.MakeRelativeUri(fileUri);
+                var decoded = HttpUtility.UrlDecode(relativePath.OriginalString);
+                // If the "relative" path still contains a drive letter, it's cross-drive - use filename only
+                if (decoded.Contains(':'))
+                    LayoutCustomDeviceData.DeviceImage = Path.GetFileName(dialog.FileName);
+                else
+                    LayoutCustomDeviceData.DeviceImage = decoded;
+            }
+            catch
+            {
+                LayoutCustomDeviceData.DeviceImage = Path.GetFileName(dialog.FileName);
+            }
+
             UpdateDeviceImage();
         }
 
@@ -159,6 +189,23 @@ namespace LayoutEditor.UI.Pages
         {
             try
             {
+                // If the file is in a temp directory, prompt for a real save location first
+                var tempDir = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var fileDir = Path.GetDirectoryName(Model.FilePath)!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (string.Equals(fileDir, tempDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    var saveDialog = new VistaSaveFileDialog
+                    {
+                        Filter = "Layout files (*.xml)|*.xml",
+                        FileName = GetLayoutFileName(),
+                        DefaultExt = ".xml",
+                        Title = "Save layout as"
+                    };
+                    if (saveDialog.ShowDialog() != true)
+                        return;
+                    Model.FilePath = saveDialog.FileName;
+                }
+
                 var backupDir = Path.Combine(Path.GetDirectoryName(Model.FilePath)!, ".layout-backups");
                 Directory.CreateDirectory(backupDir);
                 var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
@@ -171,11 +218,39 @@ namespace LayoutEditor.UI.Pages
                     File.Copy(Model.FilePath, prePath, true);
                 }
 
-                // Save
+                // Serialize to XML document so we can inject CustomData
                 XmlSerializer serializer = new(typeof(DeviceLayout));
-                using (var fs = File.Create(Model.FilePath))
-                using (StreamWriter writer = new(fs))
-                    serializer.Serialize(writer, DeviceLayout);
+                var doc = new XmlDocument();
+                using (var ms = new MemoryStream())
+                {
+                    using (var writer = new StreamWriter(ms, leaveOpen: true))
+                        serializer.Serialize(writer, DeviceLayout);
+                    ms.Seek(0, SeekOrigin.Begin);
+                    doc.Load(ms);
+                }
+
+                // Inject CustomData (DeviceImage) which XmlSerializer doesn't handle
+                var deviceImageValue = LayoutCustomDeviceData?.DeviceImage;
+                // If we have a runtime absolute path, ensure the image is copied next to the layout
+                if (!string.IsNullOrEmpty(AbsoluteDeviceImagePath) && File.Exists(AbsoluteDeviceImagePath))
+                {
+                    var layoutDir = Path.GetDirectoryName(Model.FilePath)!;
+                    var targetImage = Path.Combine(layoutDir, Path.GetFileName(AbsoluteDeviceImagePath));
+                    if (!File.Exists(targetImage))
+                        File.Copy(AbsoluteDeviceImagePath, targetImage, false);
+                    deviceImageValue = Path.GetFileName(AbsoluteDeviceImagePath);
+                }
+                if (!string.IsNullOrEmpty(deviceImageValue))
+                {
+                    if (doc["Device"]["CustomData"] == null)
+                        doc["Device"].AppendChild(doc.CreateElement("CustomData"));
+                    if (doc["Device"]["CustomData"]["DeviceImage"] == null)
+                        doc["Device"]["CustomData"].AppendChild(doc.CreateElement("DeviceImage"));
+                    doc["Device"]["CustomData"]["DeviceImage"].InnerText = deviceImageValue;
+                }
+
+                // Save
+                doc.Save(Model.FilePath);
 
                 // Post-save backup (copy what we just wrote)
                 var postPath = Path.Combine(backupDir, $"{baseName}_post_{timestamp}.xml");
@@ -364,7 +439,9 @@ namespace LayoutEditor.UI.Pages
             InputImage = Path.GetFileName(LayoutCustomDeviceData.DeviceImage);
             NotifyOfPropertyChange(nameof(DeviceImage));
 
-            var filePath = new Uri(new Uri(Model.FilePath), LayoutCustomDeviceData.DeviceImage).LocalPath;
+            // Directly push image to canvas (bypasses all binding/event issues)
+            DeviceLayoutViewModel.RefreshCanvasDeviceImage();
+
             if (_fileWatcher != null)
             {
                 _fileWatcher.Changed -= FileWatcherOnChanged;
@@ -372,14 +449,26 @@ namespace LayoutEditor.UI.Pages
                 _fileWatcher = null;
             }
 
-            if (!Directory.Exists(Path.GetDirectoryName(filePath)))
+            if (string.IsNullOrEmpty(LayoutCustomDeviceData.DeviceImage))
                 return;
-            _fileWatcher = new FileSystemWatcher(Path.GetDirectoryName(filePath)!, Path.GetFileName(filePath)!)
+
+            try
             {
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Attributes | NotifyFilters.CreationTime | NotifyFilters.FileName | NotifyFilters.Size,
-                EnableRaisingEvents = true
-            };
-            _fileWatcher.Changed += FileWatcherOnChanged;
+                var filePath = new Uri(new Uri(Model.FilePath), LayoutCustomDeviceData.DeviceImage).LocalPath;
+                var dir = Path.GetDirectoryName(filePath);
+                if (dir == null || !Directory.Exists(dir))
+                    return;
+                _fileWatcher = new FileSystemWatcher(dir, Path.GetFileName(filePath)!)
+                {
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Attributes | NotifyFilters.CreationTime | NotifyFilters.FileName | NotifyFilters.Size,
+                    EnableRaisingEvents = true
+                };
+                _fileWatcher.Changed += FileWatcherOnChanged;
+            }
+            catch (Exception)
+            {
+                // Invalid URI or path - skip watcher
+            }
         }
 
         private void FileWatcherOnChanged(object sender, FileSystemEventArgs e)
@@ -387,6 +476,7 @@ namespace LayoutEditor.UI.Pages
             _cachedDeviceImage = null;
             _cachedDeviceImagePath = null;
             NotifyOfPropertyChange(nameof(DeviceImage));
+            Application.Current?.Dispatcher?.Invoke(() => DeviceLayoutViewModel.RefreshCanvasDeviceImage());
         }
     }
 }

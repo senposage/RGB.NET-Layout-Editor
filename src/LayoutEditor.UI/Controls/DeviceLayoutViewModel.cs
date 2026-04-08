@@ -1,6 +1,8 @@
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Windows;
 using LayoutEditor.UI.Dialogs;
 using LayoutEditor.UI.Layout;
 using LayoutEditor.UI.Models;
@@ -67,19 +69,30 @@ namespace LayoutEditor.UI.Controls
             var canvas = GetCanvas();
             if (canvas != null && canvas.SelectedLeds.Count > 1)
             {
-                // Batch: set width/height on all selected, then one UpdateLeds()
+                // Capture undo state before batch resize
+                canvas.SaveUndoForSelectedPublic();
+
+                // Batch: set width/height/shape on all selected, apply each independently
                 foreach (var led in canvas.SelectedLeds)
                 {
                     led.InputWidth = SelectedLed.InputWidth;
                     led.InputHeight = SelectedLed.InputHeight;
+                    led.InputShape = SelectedLed.InputShape;
+                    led.InputShapeData = SelectedLed.InputShapeData;
                     led.ApplyInputWithoutUpdate();
+                    led.ApplyPositionDirect();
                 }
-                RecalcLeds();
+                canvas.RedrawCanvas();
             }
             else
             {
+                // Capture undo for single LED
+                if (canvas != null)
+                    canvas.SaveUndoForSelectedPublic();
+
                 SelectedLed.ApplyInputWithoutUpdate();
-                RecalcLeds();
+                SelectedLed.ApplyPositionDirect();
+                canvas?.RedrawCanvas();
             }
         }
 
@@ -91,6 +104,102 @@ namespace LayoutEditor.UI.Controls
 
         private LayoutCanvas _canvas;
         public void SetCanvas(LayoutCanvas canvas) => _canvas = canvas;
+
+        /// <summary>
+        /// Directly loads and applies the device image to the canvas, bypassing binding/event chains.
+        /// </summary>
+        public void RefreshCanvasDeviceImage()
+        {
+            if (_canvas == null) return;
+            try
+            {
+                // 1. Use the absolute path stored at selection time (most reliable)
+                string absolutePath = EditorViewModel.AbsoluteDeviceImagePath;
+
+                // 2. Fallback: resolve from LayoutCustomDeviceData.DeviceImage
+                if (string.IsNullOrEmpty(absolutePath) || !System.IO.File.Exists(absolutePath))
+                {
+                    absolutePath = null;
+                    var customData = EditorViewModel.LayoutCustomDeviceData;
+                    if (customData == null || string.IsNullOrEmpty(customData.DeviceImage))
+                    {
+                        _canvas.DeviceImageSource = null;
+                        _canvas.RedrawCanvas();
+                        return;
+                    }
+
+                    // 2a. Resolve relative to the layout file
+                    try
+                    {
+                        var fileUri = new System.Uri(new System.Uri(EditorViewModel.Model.FilePath), customData.DeviceImage);
+                        if (System.IO.File.Exists(fileUri.LocalPath))
+                            absolutePath = fileUri.LocalPath;
+                    }
+                    catch { }
+
+                    // 2b. Check same directory as the layout file (handles cross-drive filename-only saves)
+                    if (absolutePath == null)
+                    {
+                        var layoutDir = System.IO.Path.GetDirectoryName(EditorViewModel.Model.FilePath);
+                        if (layoutDir != null)
+                        {
+                            var sameDir = System.IO.Path.Combine(layoutDir, System.IO.Path.GetFileName(customData.DeviceImage));
+                            if (System.IO.File.Exists(sameDir))
+                                absolutePath = sameDir;
+                        }
+                    }
+
+                    // 2c. Treat DeviceImage as absolute path
+                    if (absolutePath == null && System.IO.File.Exists(customData.DeviceImage))
+                        absolutePath = System.IO.Path.GetFullPath(customData.DeviceImage);
+                }
+
+                if (absolutePath == null)
+                {
+                    _canvas.DeviceImageSource = null;
+                    _canvas.RedrawCanvas();
+                    return;
+                }
+
+                var image = new System.Windows.Media.Imaging.BitmapImage();
+                image.BeginInit();
+                image.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                image.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
+                image.UriSource = new System.Uri(absolutePath);
+                image.EndInit();
+                image.Freeze();
+
+                _canvas.DeviceImageSource = image;
+
+                // If layout has no dimensions, set canvas size from image aspect ratio
+                // Don't overwrite DeviceLayout.Width/Height - let the user set those
+                if (_canvas.LayoutWidth <= 0 || _canvas.LayoutHeight <= 0)
+                {
+                    if (image.PixelWidth > 0 && image.PixelHeight > 0)
+                    {
+                        // Use ~200mm for the longer axis (neutral default for any device)
+                        double aspect = (double)image.PixelWidth / image.PixelHeight;
+                        if (aspect >= 1)
+                        {
+                            _canvas.LayoutWidth = 200;
+                            _canvas.LayoutHeight = System.Math.Round(200 / aspect);
+                        }
+                        else
+                        {
+                            _canvas.LayoutHeight = 200;
+                            _canvas.LayoutWidth = System.Math.Round(200 * aspect);
+                        }
+                    }
+                }
+
+                _canvas.RedrawCanvas();
+            }
+            catch
+            {
+                _canvas.DeviceImageSource = null;
+                _canvas.RedrawCanvas();
+            }
+        }
 
         public void AddLed(string addBefore)
         {
@@ -118,16 +227,89 @@ namespace LayoutEditor.UI.Controls
         {
             if (SelectedLed == null) return;
 
-            Items.Remove(SelectedLed);
-            DeviceLayout.InternalLeds.Remove(SelectedLed.LedLayout);
+            var led = SelectedLed;
+
+            // Clear selection silently first, then remove, then redraw
+            _canvas?.ClearSelectionSilent();
             SelectedLed = null;
-            UpdateLeds();
+
+            Items.Remove(led);
+            DeviceLayout.InternalLeds.Remove(led.LedLayout);
+
+            _canvas?.RedrawCanvas();
+        }
+
+        public void RemoveAllLeds()
+        {
+            var result = _windowManager.ShowMessageBox(
+                $"Remove all {Items.Count} LEDs? This cannot be undone.",
+                "Confirm",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+
+            _canvas?.ClearSelectionSilent();
+            SelectedLed = null;
+
+            Items.Clear();
+            DeviceLayout.InternalLeds.Clear();
+
+            _canvas?.RedrawCanvas();
+        }
+
+        /// <summary>
+        /// Add LEDs from an external source (OpenRGB) with optional positions.
+        /// </summary>
+        public void AddLedsFromDevice(List<(string id, string x, string y, string w, string h)> leds)
+        {
+            var existingIds = new HashSet<string>(DeviceLayout.Leds.Select(l => l.Id));
+
+            // Use a temp device with unit size 1 so descriptive values are treated as mm directly
+            // (avoids the real DeviceLayout.LedUnitWidth multiplier inflating sizes)
+            var tempDevice = new DeviceLayout { LedUnitWidth = 1, LedUnitHeight = 1 };
+
+            var added = 0;
+            foreach (var (id, x, y, w, h) in leds)
+            {
+                if (existingIds.Contains(id)) continue;
+
+                var ledLayout = new LedLayout
+                {
+                    Id = id,
+                    DescriptiveX = x,
+                    DescriptiveY = y,
+                    DescriptiveWidth = w,
+                    DescriptiveHeight = h,
+                    CustomData = new LayoutCustomLedData()
+                };
+                // Calculate with unit=1 so values pass through as mm
+                ledLayout.CalculateValues(tempDevice, null);
+
+                DeviceLayout.InternalLeds.Add(ledLayout);
+                var vm = new LedViewModel(Model, this, _windowManager, ledLayout);
+                vm.PopulateInputOnly();
+                Items.Add(vm);
+                added++;
+            }
         }
 
         protected override void OnInitialActivate()
         {
             Items.AddRange(DeviceLayout.Leds.Select(l => new LedViewModel(Model, this, _windowManager, (LedLayout)l)));
+            // First calculate with original units so existing layouts load correctly
             UpdateLeds();
+
+            // Now normalize: write calculated absolute mm back as descriptive values
+            // and set unit=1 so all editor operations (drag, resize, save/reload) are consistent
+            foreach (var ledVm in Items)
+            {
+                ledVm.LedLayout.DescriptiveX = ledVm.LedLayout.X.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                ledVm.LedLayout.DescriptiveY = ledVm.LedLayout.Y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                ledVm.LedLayout.DescriptiveWidth = ledVm.LedLayout.Width.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                ledVm.LedLayout.DescriptiveHeight = ledVm.LedLayout.Height.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+            DeviceLayout.LedUnitWidth = 1;
+            DeviceLayout.LedUnitHeight = 1;
 
             EditorViewModel.PropertyChanged += EditorViewModelOnPropertyChanged;
 

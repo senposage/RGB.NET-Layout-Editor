@@ -125,8 +125,13 @@ namespace LayoutEditor.UI.Controls
 
         private bool _isDraggingLed;
         private Point _dragOffset;
+        private Dictionary<LedViewModel, Point> _dragStartPositions;
 
         private double? _guideX, _guideY;
+
+        private bool _isSelecting;
+        private Point _selectionStart;
+        private Rect? _selectionRect;
 
         // Expose for binding in sidebar
         public LedViewModel SelectedLed { get; private set; }
@@ -135,6 +140,7 @@ namespace LayoutEditor.UI.Controls
 
         public event Action SelectionChanged;
         public event Action ViewChanged;
+        public event Action<LedViewModel> HoverChanged;
 
         #endregion
 
@@ -286,8 +292,21 @@ namespace LayoutEditor.UI.Controls
                         border = NormalBorderPen;
                     }
 
-                    dc.DrawRectangle(fill, border, rect);
+                    if (led.LedLayout.Shape == RGB.NET.Core.Shape.Circle)
+                        dc.DrawEllipse(fill, border, new Point(rect.X + rect.Width / 2, rect.Y + rect.Height / 2), rect.Width / 2, rect.Height / 2);
+                    else
+                        dc.DrawRectangle(fill, border, rect);
                 }
+            }
+
+            // Selection rectangle
+            if (_selectionRect.HasValue)
+            {
+                var selFill = new SolidColorBrush(Color.FromArgb(30, 100, 150, 255));
+                selFill.Freeze();
+                var selPen = new Pen(new SolidColorBrush(Color.FromArgb(180, 100, 150, 255)), 0.5);
+                selPen.Freeze();
+                dc.DrawRectangle(selFill, selPen, _selectionRect.Value);
             }
 
             // Alignment guides
@@ -375,13 +394,27 @@ namespace LayoutEditor.UI.Controls
                     AddToSelection(hitLed);
                 }
 
+                // Make the clicked LED the primary selection (drag reference)
+                SelectedLed = hitLed;
+
                 // Save undo state before drag
                 SaveUndoForSelected();
 
-                // Start drag
+                // Start drag — capture all selected LED positions
                 _isDraggingLed = true;
                 _dragOffset = new Point(layoutPos.X - hitLed.LedLayout.X, layoutPos.Y - hitLed.LedLayout.Y);
+                _dragStartPositions = new Dictionary<LedViewModel, Point>();
+                foreach (var sl in SelectedLeds)
+                    _dragStartPositions[sl] = new Point(sl.LedLayout.X, sl.LedLayout.Y);
                 Mouse.OverrideCursor = Cursors.SizeAll;
+                CaptureMouse();
+            }
+            else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+            {
+                // Shift+drag background: selection rectangle
+                _isSelecting = true;
+                _selectionStart = layoutPos;
+                _selectionRect = new Rect(layoutPos, new Size(0, 0));
                 CaptureMouse();
             }
             else
@@ -448,20 +481,32 @@ namespace LayoutEditor.UI.Controls
                 targetX = Math.Round(targetX, precision);
                 targetY = Math.Round(targetY, precision);
 
-                // Move all selected LEDs by the same delta
-                var dx = targetX - SelectedLed.LedLayout.X;
-                var dy = targetY - SelectedLed.LedLayout.Y;
+                // Move all selected LEDs by the same delta from their start positions
+                var primaryStart = _dragStartPositions.GetValueOrDefault(SelectedLed, new Point(SelectedLed.LedLayout.X, SelectedLed.LedLayout.Y));
+                var dx = targetX - primaryStart.X;
+                var dy = targetY - primaryStart.Y;
 
                 foreach (var led in SelectedLeds)
                 {
-                    var nx = Math.Round(led.LedLayout.X + dx, precision);
-                    var ny = Math.Round(led.LedLayout.Y + dy, precision);
+                    if (!_dragStartPositions.TryGetValue(led, out var startPos))
+                        continue;
+                    var nx = Math.Round(startPos.X + dx, precision);
+                    var ny = Math.Round(startPos.Y + dy, precision);
                     led.InputX = nx.ToString(CultureInfo.InvariantCulture);
                     led.InputY = ny.ToString(CultureInfo.InvariantCulture);
-                    led.ApplyInputWithoutUpdate();
+                    led.ApplyPositionDirect();
                 }
-                _viewModel?.RecalcLeds();
 
+                InvalidateVisual();
+            }
+            else if (_isSelecting && e.LeftButton == MouseButtonState.Pressed)
+            {
+                // Selection rectangle
+                var x = Math.Min(_selectionStart.X, layoutPos.X);
+                var y = Math.Min(_selectionStart.Y, layoutPos.Y);
+                var w = Math.Abs(layoutPos.X - _selectionStart.X);
+                var h = Math.Abs(layoutPos.Y - _selectionStart.Y);
+                _selectionRect = new Rect(x, y, w, h);
                 InvalidateVisual();
             }
             else if (_lastPanPos.HasValue && e.LeftButton == MouseButtonState.Pressed)
@@ -481,7 +526,10 @@ namespace LayoutEditor.UI.Controls
                 _hoveredLed = HitTestLed(layoutPos);
                 Cursor = _hoveredLed != null ? Cursors.Hand : Cursors.Arrow;
                 if (oldHover != _hoveredLed)
+                {
                     InvalidateVisual();
+                    HoverChanged?.Invoke(_hoveredLed);
+                }
             }
         }
 
@@ -492,12 +540,32 @@ namespace LayoutEditor.UI.Controls
             if (_isDraggingLed)
             {
                 _isDraggingLed = false;
+                _dragStartPositions = null;
                 _guideX = null;
                 _guideY = null;
                 Mouse.OverrideCursor = null;
                 InvalidateVisual();
             }
+            else if (_isSelecting && _selectionRect.HasValue && _viewModel != null)
+            {
+                _isSelecting = false;
+                var rect = _selectionRect.Value;
+                _selectionRect = null;
 
+                // Select all LEDs whose center is inside the selection rectangle
+                ClearSelection();
+                foreach (var led in _viewModel.Items)
+                {
+                    var cx = led.LedLayout.X + led.LedLayout.Width / 2;
+                    var cy = led.LedLayout.Y + led.LedLayout.Height / 2;
+                    if (rect.Contains(new Point(cx, cy)))
+                        AddToSelection(led);
+                }
+                InvalidateVisual();
+            }
+
+            _isSelecting = false;
+            _selectionRect = null;
             _lastPanPos = null;
             ReleaseMouseCapture();
             e.Handled = true;
@@ -557,6 +625,24 @@ namespace LayoutEditor.UI.Controls
                 }
 
                 // Multi-select operations
+                if (SelectedLeds.Count == 2)
+                {
+                    var swapItem = new MenuItem { Header = $"Swap IDs ({SelectedLeds[0].LedLayout.Id} \u2194 {SelectedLeds[1].LedLayout.Id})" };
+                    swapItem.Click += (_, _) =>
+                    {
+                        var a = SelectedLeds[0];
+                        var b = SelectedLeds[1];
+                        var tempId = a.LedLayout.Id;
+                        a.InputId = b.LedLayout.Id;
+                        b.InputId = tempId;
+                        a.ApplyInputWithoutUpdate();
+                        b.ApplyInputWithoutUpdate();
+                        InvalidateVisual();
+                        SelectionChanged?.Invoke();
+                    };
+                    menu.Items.Add(swapItem);
+                }
+
                 if (SelectedLeds.Count > 1)
                 {
                     var spaceH = new MenuItem { Header = "Space evenly (horizontal)", InputGestureText = "Ctrl+H" };
@@ -579,6 +665,17 @@ namespace LayoutEditor.UI.Controls
             var addAfter = new MenuItem { Header = "Add LED after" };
             addAfter.Click += (_, _) => _viewModel.AddLed("False");
             menu.Items.Add(addAfter);
+
+            if (_viewModel.Items.Count > 0)
+            {
+                var removeAll = new MenuItem { Header = "Remove all LEDs" };
+                removeAll.Click += (_, _) =>
+                {
+                    _viewModel.RemoveAllLeds();
+                    InvalidateVisual();
+                };
+                menu.Items.Add(removeAll);
+            }
 
             if (_undoStack.Count > 0 || _redoStack.Count > 0)
             {
@@ -680,9 +777,8 @@ namespace LayoutEditor.UI.Controls
                     var precision = GetRoundingPrecision();
                     led.InputX = Math.Round(x, precision).ToString(CultureInfo.InvariantCulture);
                     led.InputY = Math.Round(y, precision).ToString(CultureInfo.InvariantCulture);
-                    led.ApplyInputWithoutUpdate();
+                    led.ApplyPositionDirect();
                 }
-                _viewModel?.RecalcLeds();
                 InvalidateVisual();
                 SelectionChanged?.Invoke();
                 e.Handled = true;
@@ -735,6 +831,23 @@ namespace LayoutEditor.UI.Controls
 
         #endregion
 
+        public void ClearSelectionPublic()
+        {
+            ClearSelection();
+        }
+
+        /// <summary>
+        /// Clear selection state without firing events or invalidating visual.
+        /// Use before removing LEDs to avoid accessing stale references in callbacks.
+        /// </summary>
+        public void ClearSelectionSilent()
+        {
+            foreach (var led in SelectedLeds)
+                led.Selected = false;
+            SelectedLeds.Clear();
+            SelectedLed = null;
+        }
+
         public void RedrawCanvas()
         {
             InvalidateVisual();
@@ -750,8 +863,8 @@ namespace LayoutEditor.UI.Controls
 
         #region Undo / Redo
 
-        private readonly Stack<UndoEntry> _undoStack = new();
-        private readonly Stack<UndoEntry> _redoStack = new();
+        private readonly Stack<List<UndoEntry>> _undoStack = new();
+        private readonly Stack<List<UndoEntry>> _redoStack = new();
 
         private struct UndoEntry
         {
@@ -763,9 +876,10 @@ namespace LayoutEditor.UI.Controls
         public void PushUndo(List<(LedViewModel led, float oldX, float oldY, float oldW, float oldH)> entries)
         {
             _redoStack.Clear();
+            var batch = new List<UndoEntry>(entries.Count);
             foreach (var (led, oldX, oldY, oldW, oldH) in entries)
             {
-                _undoStack.Push(new UndoEntry
+                batch.Add(new UndoEntry
                 {
                     Led = led,
                     OldX = oldX, OldY = oldY, OldW = oldW, OldH = oldH,
@@ -773,6 +887,7 @@ namespace LayoutEditor.UI.Controls
                     NewW = led.LedLayout.Width, NewH = led.LedLayout.Height
                 });
             }
+            _undoStack.Push(batch);
         }
 
         public void UndoPublic() => Undo();
@@ -781,14 +896,16 @@ namespace LayoutEditor.UI.Controls
         private void Undo()
         {
             if (_undoStack.Count == 0) return;
-            var entry = _undoStack.Pop();
-            _redoStack.Push(entry);
-            entry.Led.InputX = entry.OldX.ToString(CultureInfo.InvariantCulture);
-            entry.Led.InputY = entry.OldY.ToString(CultureInfo.InvariantCulture);
-            entry.Led.InputWidth = entry.OldW.ToString(CultureInfo.InvariantCulture);
-            entry.Led.InputHeight = entry.OldH.ToString(CultureInfo.InvariantCulture);
-            entry.Led.ApplyInputWithoutUpdate();
-            _viewModel?.RecalcLeds();
+            var batch = _undoStack.Pop();
+            _redoStack.Push(batch);
+            foreach (var entry in batch)
+            {
+                entry.Led.InputX = entry.OldX.ToString(CultureInfo.InvariantCulture);
+                entry.Led.InputY = entry.OldY.ToString(CultureInfo.InvariantCulture);
+                entry.Led.InputWidth = entry.OldW.ToString(CultureInfo.InvariantCulture);
+                entry.Led.InputHeight = entry.OldH.ToString(CultureInfo.InvariantCulture);
+                entry.Led.ApplyPositionDirect();
+            }
             InvalidateVisual();
             SelectionChanged?.Invoke();
         }
@@ -796,14 +913,16 @@ namespace LayoutEditor.UI.Controls
         private void Redo()
         {
             if (_redoStack.Count == 0) return;
-            var entry = _redoStack.Pop();
-            _undoStack.Push(entry);
-            entry.Led.InputX = entry.NewX.ToString(CultureInfo.InvariantCulture);
-            entry.Led.InputY = entry.NewY.ToString(CultureInfo.InvariantCulture);
-            entry.Led.InputWidth = entry.NewW.ToString(CultureInfo.InvariantCulture);
-            entry.Led.InputHeight = entry.NewH.ToString(CultureInfo.InvariantCulture);
-            entry.Led.ApplyInputWithoutUpdate();
-            _viewModel?.RecalcLeds();
+            var batch = _redoStack.Pop();
+            _undoStack.Push(batch);
+            foreach (var entry in batch)
+            {
+                entry.Led.InputX = entry.NewX.ToString(CultureInfo.InvariantCulture);
+                entry.Led.InputY = entry.NewY.ToString(CultureInfo.InvariantCulture);
+                entry.Led.InputWidth = entry.NewW.ToString(CultureInfo.InvariantCulture);
+                entry.Led.InputHeight = entry.NewH.ToString(CultureInfo.InvariantCulture);
+                entry.Led.ApplyPositionDirect();
+            }
             InvalidateVisual();
             SelectionChanged?.Invoke();
         }
@@ -835,10 +954,9 @@ namespace LayoutEditor.UI.Controls
             foreach (var led in sorted)
             {
                 led.InputX = Math.Round(currentX, precision).ToString(CultureInfo.InvariantCulture);
-                led.ApplyInputWithoutUpdate();
+                led.ApplyPositionDirect();
                 currentX += led.LedLayout.Width + gap;
             }
-            _viewModel?.RecalcLeds();
 
             InvalidateVisual();
             SelectionChanged?.Invoke();
@@ -865,10 +983,9 @@ namespace LayoutEditor.UI.Controls
             foreach (var led in sorted)
             {
                 led.InputY = Math.Round(currentY, precision).ToString(CultureInfo.InvariantCulture);
-                led.ApplyInputWithoutUpdate();
+                led.ApplyPositionDirect();
                 currentY += led.LedLayout.Height + gap;
             }
-            _viewModel?.RecalcLeds();
 
             InvalidateVisual();
             SelectionChanged?.Invoke();
@@ -890,13 +1007,14 @@ namespace LayoutEditor.UI.Controls
                 var snappedY = Math.Round(Math.Round(led.LedLayout.Y / GridSize) * GridSize, precision);
                 led.InputX = snappedX.ToString(CultureInfo.InvariantCulture);
                 led.InputY = snappedY.ToString(CultureInfo.InvariantCulture);
-                led.ApplyInputWithoutUpdate();
+                led.ApplyPositionDirect();
             }
-            _viewModel?.RecalcLeds();
 
             InvalidateVisual();
             SelectionChanged?.Invoke();
         }
+
+        public void SaveUndoForSelectedPublic() => SaveUndoForSelected();
 
         private void SaveUndoForSelected()
         {

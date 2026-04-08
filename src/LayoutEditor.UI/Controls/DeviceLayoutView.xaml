@@ -27,7 +27,6 @@
 
         <!-- Canvas area -->
         <local:LayoutCanvas x:Name="Canvas" Grid.Column="0"
-                            DeviceImageSource="{Binding EditorViewModel.DeviceImage}"
                             LayoutWidth="{Binding DeviceLayout.Width}"
                             LayoutHeight="{Binding DeviceLayout.Height}" />
 
@@ -152,7 +151,12 @@
                     <TextBlock Text="LED LIST" FontWeight="Bold" FontSize="10" Foreground="#999" Margin="0,0,0,4" />
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <Button Content="+ Before" Command="{s:Action AddLed}" CommandParameter="True" Padding="8,2" Margin="0,0,4,0" />
-                        <Button Content="+ After" Command="{s:Action AddLed}" CommandParameter="False" Padding="8,2" />
+                        <Button Content="+ After" Command="{s:Action AddLed}" CommandParameter="False" Padding="8,2" Margin="0,0,4,0" />
+                        <Button x:Name="AutoFillBtn" Content="Auto-fill" Click="AutoFill_Click" Padding="8,2" IsEnabled="False"
+                                ToolTip="Add LEDs from OpenRGB device (requires connection)" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <Button Content="Remove All" Command="{s:Action RemoveAllLeds}" Padding="8,2" Foreground="#CC3333" ToolTip="Remove all LEDs from the layout" />
                     </StackPanel>
                     <ListBox ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedLed}"
                              Height="200" Margin="0,0,0,4">
@@ -162,6 +166,28 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+
+                    <Separator Margin="0,4,0,6" />
+
+                    <!-- OpenRGB Link -->
+                    <TextBlock Text="OPENRGB LINK" FontWeight="Bold" FontSize="10" Foreground="#999" Margin="0,0,0,4" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="Host:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <TextBox x:Name="OrgbHost" Width="85" Height="22" Text="127.0.0.1" VerticalAlignment="Center" />
+                        <TextBlock Text=":" VerticalAlignment="Center" Margin="2,0,2,0" />
+                        <TextBox x:Name="OrgbPort" Width="42" Height="22" Text="6742" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <Button x:Name="OrgbConnectBtn" Content="Connect" Click="OrgbConnect_Click" Padding="8,2" Margin="0,0,4,0" />
+                        <Button x:Name="OrgbDisconnectBtn" Content="Disconnect" Click="OrgbDisconnect_Click" Padding="8,2" IsEnabled="False" />
+                    </StackPanel>
+                    <TextBlock x:Name="OrgbStatus" Text="Disconnected" FontSize="11" Foreground="#999" Margin="0,0,0,4" />
+                    <StackPanel Margin="0,0,0,4">
+                        <TextBlock Text="Device:" FontSize="11" Margin="0,0,0,2" />
+                        <ComboBox x:Name="OrgbDeviceCombo" Height="24" IsEnabled="False"
+                                  SelectionChanged="OrgbDevice_SelectionChanged" />
+                    </StackPanel>
+                    <CheckBox x:Name="OrgbEnabledCheck" Content="Highlight on select" IsChecked="True" Margin="0,0,0,4" IsEnabled="False" />
 
                     <Separator Margin="0,4,0,6" />
 

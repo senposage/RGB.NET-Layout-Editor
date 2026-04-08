@@ -144,6 +144,21 @@ namespace LayoutEditor.UI.Controls
                 LedLayout.DescriptiveShape = InputShape.ToString();
         }
 
+        /// <summary>
+        /// Sets descriptive values and recalculates ONLY this LED's position/size,
+        /// without chaining through all other LEDs. Use for drag/nudge operations.
+        /// Uses unit=1 so descriptive values are treated as direct mm.
+        /// </summary>
+        private static readonly DeviceLayout UnitOneDevice = new() { LedUnitWidth = 1, LedUnitHeight = 1 };
+        public void ApplyPositionDirect()
+        {
+            LedLayout.DescriptiveX = InputX;
+            LedLayout.DescriptiveY = InputY;
+            LedLayout.DescriptiveWidth = InputWidth;
+            LedLayout.DescriptiveHeight = InputHeight;
+            LedLayout.CalculateValues(UnitOneDevice, null);
+        }
+
         public void Update()
         {
             ApplyLogicalLayout();
