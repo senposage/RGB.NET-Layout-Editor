@@ -106,6 +106,18 @@ namespace LayoutEditor.UI.Controls
         public void SetCanvas(LayoutCanvas canvas) => _canvas = canvas;
 
         /// <summary>
+        /// Push DeviceLayout.Width/Height to the canvas, triggering proportional LED scaling.
+        /// </summary>
+        public void PushDimensionsToCanvas()
+        {
+            if (_canvas == null) return;
+            var w = (double)DeviceLayout.Width;
+            var h = (double)DeviceLayout.Height;
+            if (w > 0) _canvas.LayoutWidth = w;
+            if (h > 0) _canvas.LayoutHeight = h;
+        }
+
+        /// <summary>
         /// Directly loads and applies the device image to the canvas, bypassing binding/event chains.
         /// </summary>
         public void RefreshCanvasDeviceImage()
@@ -171,24 +183,30 @@ namespace LayoutEditor.UI.Controls
 
                 _canvas.DeviceImageSource = image;
 
-                // If layout has no dimensions, set canvas size from image aspect ratio
-                // Don't overwrite DeviceLayout.Width/Height - let the user set those
+                // If layout has no dimensions, set size from image aspect ratio
+                // Write back to DeviceLayout so the value stays in sync with the canvas
                 if (_canvas.LayoutWidth <= 0 || _canvas.LayoutHeight <= 0)
                 {
                     if (image.PixelWidth > 0 && image.PixelHeight > 0)
                     {
-                        // Use ~200mm for the longer axis (neutral default for any device)
                         double aspect = (double)image.PixelWidth / image.PixelHeight;
+                        double w, h;
                         if (aspect >= 1)
                         {
-                            _canvas.LayoutWidth = 200;
-                            _canvas.LayoutHeight = System.Math.Round(200 / aspect);
+                            w = 200;
+                            h = System.Math.Round(200 / aspect);
                         }
                         else
                         {
-                            _canvas.LayoutHeight = 200;
-                            _canvas.LayoutWidth = System.Math.Round(200 * aspect);
+                            h = 200;
+                            w = System.Math.Round(200 * aspect);
                         }
+                        DeviceLayout.Width = (float)w;
+                        DeviceLayout.Height = (float)h;
+                        _canvas.SuppressDimensionScaling = true;
+                        _canvas.LayoutWidth = w;
+                        _canvas.LayoutHeight = h;
+                        _canvas.SuppressDimensionScaling = false;
                     }
                 }
 

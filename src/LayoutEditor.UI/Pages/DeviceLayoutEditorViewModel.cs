@@ -82,6 +82,28 @@ namespace LayoutEditor.UI.Pages
         public string SelectedLogicalLayout { get; set; }
         public string LedSubfolder { get; set; }
 
+        public float InputDeviceWidth
+        {
+            get => DeviceLayout.Width;
+            set
+            {
+                if (value == DeviceLayout.Width) return;
+                DeviceLayout.Width = value;
+                DeviceLayoutViewModel.PushDimensionsToCanvas();
+            }
+        }
+
+        public float InputDeviceHeight
+        {
+            get => DeviceLayout.Height;
+            set
+            {
+                if (value == DeviceLayout.Height) return;
+                DeviceLayout.Height = value;
+                DeviceLayoutViewModel.PushDimensionsToCanvas();
+            }
+        }
+
         public string InputImage { get; set; }
 
         public object DeviceImage
@@ -183,6 +205,20 @@ namespace LayoutEditor.UI.Pages
                 MessageBoxImage.Question);
             if (result == MessageBoxResult.Yes)
                 _shellViewModel.Reset();
+        }
+
+        public void SaveAs()
+        {
+            var saveDialog = new VistaSaveFileDialog
+            {
+                Filter = "Layout files (*.xml)|*.xml",
+                FileName = GetLayoutFileName(),
+                DefaultExt = ".xml",
+                Title = "Save layout as"
+            };
+            if (saveDialog.ShowDialog() != true) return;
+            Model.FilePath = saveDialog.FileName;
+            QuickSave();
         }
 
         public void QuickSave()

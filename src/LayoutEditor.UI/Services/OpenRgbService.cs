@@ -54,8 +54,8 @@ namespace LayoutEditor.UI.Services
             { "Key: Right Windows", "Keyboard_RightGui" },
             { "Key: Left Control", "Keyboard_LeftCtrl" },
             { "Key: Right Control", "Keyboard_RightCtrl" },
-            { "Key: Left Fn", "Keyboard_Function" },
             { "Key: Right Fn", "Keyboard_Function" },
+            { "Key: Left Fn", "Keyboard_Function" },
             { "Key: Menu", "Keyboard_Application" },
             { "Key: Num Lock", "Keyboard_NumLock" },
             { "Key: Up Arrow", "Keyboard_ArrowUp" },
@@ -77,6 +77,14 @@ namespace LayoutEditor.UI.Services
 
         // Reverse lookup: RGB.NET name → OpenRGB name (for FindMatchingLed)
         private static readonly Dictionary<string, string> RgbNetToOpenRgb;
+
+        // Runtime mapping: Keyboard_Custom{N} → original OpenRGB name (populated during auto-fill or device connect)
+        private static readonly Dictionary<string, string> CustomIdToOpenRgbName = new(StringComparer.OrdinalIgnoreCase);
+
+        public static void RegisterCustomMapping(string customId, string openRgbName)
+        {
+            CustomIdToOpenRgbName[customId] = openRgbName;
+        }
 
         static OpenRgbService()
         {
@@ -242,36 +250,78 @@ namespace LayoutEditor.UI.Services
         /// <summary>
         /// Try to map an OpenRGB LED name to an RGB.NET LedId enum name.
         /// </summary>
-        public static string MapToRgbNetId(string openRgbName, IEnumerable<string> allLedIds)
+        /// <summary>
+        /// Map an OpenRGB LED name to an RGB.NET LedId enum name.
+        /// Pass usedIds to track assignments; unmatched LEDs get Keyboard_Custom{N}.
+        /// </summary>
+        public static string MapToRgbNetId(string openRgbName, IEnumerable<string> allLedIds, HashSet<string> usedIds = null)
         {
-            if (string.IsNullOrEmpty(openRgbName)) return openRgbName;
+            if (string.IsNullOrEmpty(openRgbName))
+                return AssignCustomId(usedIds, openRgbName);
 
             // Direct dictionary lookup for known problem keys (symbols, compound names)
             if (OpenRgbToRgbNet.TryGetValue(openRgbName, out var mapped))
+            {
+                usedIds?.Add(mapped);
                 return mapped;
+            }
 
             // Fallback: normalize and compare
             var normalized = NormalizeName(openRgbName);
             foreach (var ledId in allLedIds)
             {
                 if (NormalizeName(ledId) == normalized)
+                {
+                    usedIds?.Add(ledId);
                     return ledId;
+                }
             }
-            // No match - return the OpenRGB name as-is (works as a custom ID)
-            return openRgbName;
+
+            // No match — assign Keyboard_Custom{N} and remember the original OpenRGB name
+            return AssignCustomId(usedIds, openRgbName);
+        }
+
+        private static string AssignCustomId(HashSet<string> usedIds, string originalOpenRgbName)
+        {
+            for (int i = 1; i <= 99; i++)
+            {
+                var id = $"Keyboard_Custom{i}";
+                if (usedIds == null || !usedIds.Contains(id))
+                {
+                    usedIds?.Add(id);
+                    if (!string.IsNullOrEmpty(originalOpenRgbName))
+                        CustomIdToOpenRgbName[id] = originalOpenRgbName;
+                    return id;
+                }
+            }
+            return $"Keyboard_Custom{usedIds?.Count ?? 0}";
         }
 
         private int FindMatchingLed(Device device, string ledId)
         {
             if (string.IsNullOrEmpty(ledId)) return -1;
 
-            // If ledId is an RGB.NET name, resolve to OpenRGB name via reverse lookup
-            if (RgbNetToOpenRgb.TryGetValue(ledId, out var openRgbName))
+            // Check Custom ID mapping first (Keyboard_Custom{N} → original OpenRGB name)
+            if (CustomIdToOpenRgbName.TryGetValue(ledId, out var customOriginal))
             {
                 for (int i = 0; i < device.Leds.Length; i++)
                 {
-                    if (string.Equals(device.Leds[i].Name, openRgbName, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(device.Leds[i].Name, customOriginal, StringComparison.OrdinalIgnoreCase))
                         return i;
+                }
+            }
+
+            // If ledId is an RGB.NET name, try ALL OpenRGB names that map to it
+            // (e.g. Keyboard_Function → "Key: Right Fn" and "Key: Left Fn")
+            foreach (var kv in OpenRgbToRgbNet)
+            {
+                if (string.Equals(kv.Value, ledId, StringComparison.OrdinalIgnoreCase))
+                {
+                    for (int i = 0; i < device.Leds.Length; i++)
+                    {
+                        if (string.Equals(device.Leds[i].Name, kv.Key, StringComparison.OrdinalIgnoreCase))
+                            return i;
+                    }
                 }
             }
 
@@ -284,11 +334,11 @@ namespace LayoutEditor.UI.Services
                     return i;
             }
 
-            // Partial match: one contains the other
+            // Partial match: one contains the other (require min 3 chars to avoid false positives like "c" matching "function")
             for (int i = 0; i < device.Leds.Length; i++)
             {
                 var normalizedLed = NormalizeName(device.Leds[i].Name);
-                if (normalizedLed.Length > 0 && normalizedId.Length > 0 &&
+                if (normalizedLed.Length >= 3 && normalizedId.Length >= 3 &&
                     (normalizedId.Contains(normalizedLed) || normalizedLed.Contains(normalizedId)))
                     return i;
             }

@@ -25,11 +25,45 @@ namespace LayoutEditor.UI.Controls
 
         public static readonly DependencyProperty LayoutWidthProperty =
             DependencyProperty.Register(nameof(LayoutWidth), typeof(double), typeof(LayoutCanvas),
-                new FrameworkPropertyMetadata(480.0, FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender));
+                new FrameworkPropertyMetadata(480.0, FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender,
+                    OnLayoutDimensionChanged));
 
         public static readonly DependencyProperty LayoutHeightProperty =
             DependencyProperty.Register(nameof(LayoutHeight), typeof(double), typeof(LayoutCanvas),
-                new FrameworkPropertyMetadata(276.0, FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender));
+                new FrameworkPropertyMetadata(276.0, FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender,
+                    OnLayoutDimensionChanged));
+
+        public bool SuppressDimensionScaling { get; set; }
+
+        private static void OnLayoutDimensionChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is not LayoutCanvas canvas || canvas._viewModel == null || canvas.SuppressDimensionScaling) return;
+
+            var oldVal = (double)e.OldValue;
+            var newVal = (double)e.NewValue;
+            bool isWidth = e.Property == LayoutWidthProperty;
+
+            if (newVal <= 0 || oldVal <= 0 || Math.Abs(oldVal - newVal) < 0.001) return;
+
+            double scale = newVal / oldVal;
+
+            foreach (var led in canvas._viewModel.Items)
+            {
+                if (isWidth)
+                {
+                    led.LedLayout.DescriptiveX = (led.LedLayout.X * scale).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+                    led.LedLayout.DescriptiveWidth = (led.LedLayout.Width * scale).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+                }
+                else
+                {
+                    led.LedLayout.DescriptiveY = (led.LedLayout.Y * scale).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+                    led.LedLayout.DescriptiveHeight = (led.LedLayout.Height * scale).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+                }
+            }
+
+            canvas._viewModel.RecalcLeds();
+            canvas.RedrawCanvas();
+        }
 
         public static readonly DependencyProperty ShowGridProperty =
             DependencyProperty.Register(nameof(ShowGrid), typeof(bool), typeof(LayoutCanvas),
@@ -161,7 +195,7 @@ namespace LayoutEditor.UI.Controls
             GuidePen.Freeze();
 
             var selColor = Color.FromRgb(237, 65, 131);
-            SelectedBorderPen = new Pen(new SolidColorBrush(selColor), 1.5);
+            SelectedBorderPen = new Pen(new SolidColorBrush(selColor), 0.7);
             SelectedBorderPen.Freeze();
             SelectedFill = new SolidColorBrush(Color.FromArgb(80, selColor.R, selColor.G, selColor.B));
             SelectedFill.Freeze();
@@ -173,7 +207,7 @@ namespace LayoutEditor.UI.Controls
             HoverFill.Freeze();
 
             var normColor = Color.FromRgb(62, 180, 203);
-            NormalBorderPen = new Pen(new SolidColorBrush(normColor), 1.0);
+            NormalBorderPen = new Pen(new SolidColorBrush(normColor), 0.4);
             NormalBorderPen.Freeze();
             NormalFill = new SolidColorBrush(Color.FromArgb(40, normColor.R, normColor.G, normColor.B));
             NormalFill.Freeze();
@@ -645,13 +679,38 @@ namespace LayoutEditor.UI.Controls
 
                 if (SelectedLeds.Count > 1)
                 {
+                    var alignMenu = new MenuItem { Header = "Align" };
+                    var alignT = new MenuItem { Header = "Align Top" };
+                    alignT.Click += (_, _) => AlignTop();
+                    alignMenu.Items.Add(alignT);
+                    var alignB = new MenuItem { Header = "Align Bottom" };
+                    alignB.Click += (_, _) => AlignBottom();
+                    alignMenu.Items.Add(alignB);
+                    var alignL = new MenuItem { Header = "Align Left" };
+                    alignL.Click += (_, _) => AlignLeft();
+                    alignMenu.Items.Add(alignL);
+                    var alignR = new MenuItem { Header = "Align Right" };
+                    alignR.Click += (_, _) => AlignRight();
+                    alignMenu.Items.Add(alignR);
+                    menu.Items.Add(alignMenu);
+
+                    var distMenu = new MenuItem { Header = "Distribute" };
                     var spaceH = new MenuItem { Header = "Space evenly (horizontal)", InputGestureText = "Ctrl+H" };
                     spaceH.Click += (_, _) => AutoSpaceHorizontal();
-                    menu.Items.Add(spaceH);
-
+                    distMenu.Items.Add(spaceH);
                     var spaceV = new MenuItem { Header = "Space evenly (vertical)", InputGestureText = "Ctrl+J" };
                     spaceV.Click += (_, _) => AutoSpaceVertical();
-                    menu.Items.Add(spaceV);
+                    distMenu.Items.Add(spaceV);
+                    menu.Items.Add(distMenu);
+
+                    var sizeMenu = new MenuItem { Header = "Match size" };
+                    var matchW = new MenuItem { Header = "Match Width" };
+                    matchW.Click += (_, _) => MatchWidth();
+                    sizeMenu.Items.Add(matchW);
+                    var matchH = new MenuItem { Header = "Match Height" };
+                    matchH.Click += (_, _) => MatchHeight();
+                    sizeMenu.Items.Add(matchH);
+                    menu.Items.Add(sizeMenu);
 
                     menu.Items.Add(new Separator());
                 }
@@ -987,6 +1046,100 @@ namespace LayoutEditor.UI.Controls
                 currentY += led.LedLayout.Height + gap;
             }
 
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        /// <summary>Align all selected LEDs to the top edge of the topmost LED.</summary>
+        public void AlignTop()
+        {
+            if (SelectedLeds.Count < 2) return;
+            SaveUndoForSelected();
+            var minY = SelectedLeds.Min(l => l.LedLayout.Y);
+            foreach (var led in SelectedLeds)
+            {
+                led.InputY = Math.Round(minY, GetRoundingPrecision()).ToString(CultureInfo.InvariantCulture);
+                led.ApplyPositionDirect();
+            }
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        /// <summary>Align all selected LEDs to the bottom edge of the bottommost LED.</summary>
+        public void AlignBottom()
+        {
+            if (SelectedLeds.Count < 2) return;
+            SaveUndoForSelected();
+            var maxBottom = SelectedLeds.Max(l => l.LedLayout.Y + l.LedLayout.Height);
+            var p = GetRoundingPrecision();
+            foreach (var led in SelectedLeds)
+            {
+                led.InputY = Math.Round(maxBottom - led.LedLayout.Height, p).ToString(CultureInfo.InvariantCulture);
+                led.ApplyPositionDirect();
+            }
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        /// <summary>Align all selected LEDs to the left edge of the leftmost LED.</summary>
+        public void AlignLeft()
+        {
+            if (SelectedLeds.Count < 2) return;
+            SaveUndoForSelected();
+            var minX = SelectedLeds.Min(l => l.LedLayout.X);
+            foreach (var led in SelectedLeds)
+            {
+                led.InputX = Math.Round(minX, GetRoundingPrecision()).ToString(CultureInfo.InvariantCulture);
+                led.ApplyPositionDirect();
+            }
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        /// <summary>Align all selected LEDs to the right edge of the rightmost LED.</summary>
+        public void AlignRight()
+        {
+            if (SelectedLeds.Count < 2) return;
+            SaveUndoForSelected();
+            var maxRight = SelectedLeds.Max(l => l.LedLayout.X + l.LedLayout.Width);
+            var p = GetRoundingPrecision();
+            foreach (var led in SelectedLeds)
+            {
+                led.InputX = Math.Round(maxRight - led.LedLayout.Width, p).ToString(CultureInfo.InvariantCulture);
+                led.ApplyPositionDirect();
+            }
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        /// <summary>Set all selected LEDs to the same width as the first selected (primary).</summary>
+        public void MatchWidth()
+        {
+            if (SelectedLeds.Count < 2 || SelectedLed == null) return;
+            SaveUndoForSelected();
+            var targetW = SelectedLed.LedLayout.Width;
+            foreach (var led in SelectedLeds)
+            {
+                led.InputWidth = Math.Round(targetW, GetRoundingPrecision()).ToString(CultureInfo.InvariantCulture);
+                led.ApplyInputWithoutUpdate();
+                led.ApplyPositionDirect();
+            }
+            InvalidateVisual();
+            SelectionChanged?.Invoke();
+        }
+
+        /// <summary>Set all selected LEDs to the same height as the first selected (primary).</summary>
+        public void MatchHeight()
+        {
+            if (SelectedLeds.Count < 2 || SelectedLed == null) return;
+            SaveUndoForSelected();
+            var targetH = SelectedLed.LedLayout.Height;
+            foreach (var led in SelectedLeds)
+            {
+                led.InputHeight = Math.Round(targetH, GetRoundingPrecision()).ToString(CultureInfo.InvariantCulture);
+                led.ApplyInputWithoutUpdate();
+                led.ApplyPositionDirect();
+            }
             InvalidateVisual();
             SelectionChanged?.Invoke();
         }

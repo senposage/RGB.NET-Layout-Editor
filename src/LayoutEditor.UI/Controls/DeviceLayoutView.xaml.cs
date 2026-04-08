@@ -31,6 +31,11 @@ namespace LayoutEditor.UI.Controls
         {
             if (DataContext is DeviceLayoutViewModel vm)
             {
+                // Set initial canvas dimensions from file (suppress scaling — these are the base values)
+                Canvas.SuppressDimensionScaling = true;
+                Canvas.LayoutWidth = vm.DeviceLayout.Width;
+                Canvas.LayoutHeight = vm.DeviceLayout.Height;
+
                 Canvas.SetViewModel(vm);
                 vm.SetCanvas(Canvas);
 
@@ -52,8 +57,9 @@ namespace LayoutEditor.UI.Controls
                     SendHoverToOpenRgb(hoveredLed);
                 };
 
-                // Load initial device image directly
+                // Load initial device image directly (may auto-size canvas if Width/Height was 0)
                 vm.RefreshCanvasDeviceImage();
+                Canvas.SuppressDimensionScaling = false;
 
                 Canvas.RedrawCanvas();
                 UpdateStatusTexts();
@@ -155,7 +161,44 @@ namespace LayoutEditor.UI.Controls
         private void OrgbDevice_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (OrgbDeviceCombo.SelectedIndex >= 0)
+            {
                 _openRgb.SelectDevice(OrgbDeviceCombo.SelectedIndex);
+                RebuildCustomIdMapping();
+            }
+        }
+
+        /// <summary>
+        /// Rebuild Keyboard_Custom{N} → OpenRGB name mapping from current layout + connected device.
+        /// Matches Custom IDs to device LEDs that don't have a standard RGB.NET mapping.
+        /// </summary>
+        private void RebuildCustomIdMapping()
+        {
+            if (DataContext is not DeviceLayoutViewModel vm) return;
+            if (!_openRgb.IsConnected || _openRgb.SelectedDeviceIndex < 0) return;
+
+            var deviceLeds = _openRgb.GetSelectedDeviceLeds();
+            if (deviceLeds.Count == 0) return;
+
+            // Find which OpenRGB LEDs have no standard RGB.NET match
+            var unmatchedOpenRgb = new List<string>();
+            foreach (var led in deviceLeds)
+            {
+                var mapped = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames, null);
+                if (mapped.StartsWith("Keyboard_Custom", StringComparison.OrdinalIgnoreCase))
+                    unmatchedOpenRgb.Add(led.Name);
+            }
+
+            // Find Custom IDs in the layout, in order
+            var customIds = vm.Items
+                .Select(i => i.LedLayout.Id)
+                .Where(id => id != null && id.StartsWith("Keyboard_Custom", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // Pair them up in order
+            for (int i = 0; i < Math.Min(customIds.Count, unmatchedOpenRgb.Count); i++)
+            {
+                OpenRgbService.RegisterCustomMapping(customIds[i], unmatchedOpenRgb[i]);
+            }
         }
 
         private void AutoFill_Click(object sender, RoutedEventArgs e)
@@ -227,6 +270,8 @@ namespace LayoutEditor.UI.Controls
 
             var leds = new List<(string id, string x, string y, string w, string h)>();
             var occupied = new HashSet<(int row, int col)>();
+            // Track used RGB.NET IDs to assign unique Keyboard_Custom{N} for unmatched LEDs
+            var usedIds = new HashSet<string>(vm.DeviceLayout.Leds.Select(l => l.Id).Where(id => !string.IsNullOrEmpty(id)), StringComparer.OrdinalIgnoreCase);
 
             // Place non-matrix LEDs well below the matrix
             int fallbackCol = 0;
@@ -239,7 +284,7 @@ namespace LayoutEditor.UI.Controls
 
             foreach (var led in matrixLeds)
             {
-                var rgbNetId = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames);
+                var rgbNetId = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames, usedIds);
 
                 int row = led.Row.Value;
                 int col = led.Col.Value;
@@ -279,7 +324,7 @@ namespace LayoutEditor.UI.Controls
 
                     foreach (var led in ledsInGroup)
                     {
-                        var rgbNetId = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames);
+                        var rgbNetId = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames, usedIds);
                         double x = fallbackCol * stripSpacing;
                         double y = fallbackRow * spacingH;
 
@@ -297,7 +342,7 @@ namespace LayoutEditor.UI.Controls
                 {
                     foreach (var led in ledsInGroup)
                     {
-                        var rgbNetId = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames);
+                        var rgbNetId = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames, usedIds);
 
                         while (occupied.Contains((fallbackRow, fallbackCol)))
                             fallbackCol++;

@@ -27,6 +27,7 @@
                 <Menu DockPanel.Dock="Top" Background="White" BorderBrush="#FF535353">
                     <MenuItem Header="_File">
                         <MenuItem Command="{s:Action QuickSave}" Header="_Save" InputGestureText="Ctrl+S" />
+                        <MenuItem Command="{s:Action SaveAs}" Header="Save _As..." />
                         <MenuItem Command="{s:Action Save}" Header="_Export layout..." />
                         <Separator />
                         <MenuItem Command="{s:Action NewLayout}" Header="_New layout" />
@@ -81,11 +82,11 @@
 
             <Label Content="Width (mm)" Height="26" HorizontalAlignment="Left" VerticalAlignment="Top" Grid.Column="0"
                    Grid.Row="3" Grid.ColumnSpan="2" />
-            <TextBox Height="23" Text="{Binding DeviceLayout.Width, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Top" Grid.Column="2"
+            <TextBox Height="23" Text="{Binding InputDeviceWidth, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Top" Grid.Column="2"
                      Grid.Row="3" />
             <Label Content="Heigh (mm)" Height="26" HorizontalAlignment="Left" VerticalAlignment="Top" Grid.Column="3"
                    Grid.Row="3" />
-            <TextBox Height="23" Text="{Binding DeviceLayout.Height, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Top" Grid.Column="4"
+            <TextBox Height="23" Text="{Binding InputDeviceHeight, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Top" Grid.Column="4"
                      Grid.Row="3" />
 
             <Label Content="Type" Height="26" HorizontalAlignment="Left" VerticalAlignment="Top" Grid.Column="0"

@@ -26,9 +26,7 @@
         </Grid.ColumnDefinitions>
 
         <!-- Canvas area -->
-        <local:LayoutCanvas x:Name="Canvas" Grid.Column="0"
-                            LayoutWidth="{Binding DeviceLayout.Width}"
-                            LayoutHeight="{Binding DeviceLayout.Height}" />
+        <local:LayoutCanvas x:Name="Canvas" Grid.Column="0" />
 
         <!-- Resizable splitter -->
         <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" Background="#D0D0D0" Cursor="SizeWE" />
