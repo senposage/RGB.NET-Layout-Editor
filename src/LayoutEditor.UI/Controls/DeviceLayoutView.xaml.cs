@@ -117,7 +117,7 @@ namespace LayoutEditor.UI.Controls
                     _openRgb.Connect(host, port);
                     Dispatcher.Invoke(() =>
                     {
-                        OrgbStatus.Text = $"Connected ({_openRgb.Devices.Length} devices)";
+                        OrgbStatus.Text = $"Connected · SDK v{_openRgb.ProtocolVersion} ({_openRgb.Devices.Length} devices)";
                         OrgbStatus.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(100, 200, 100));
                         OrgbConnectBtn.IsEnabled = false;
                         OrgbDisconnectBtn.IsEnabled = true;
@@ -218,12 +218,28 @@ namespace LayoutEditor.UI.Controls
                 return;
             }
 
+            var suggestedIds = deviceLeds.Select(l => l.SuggestedRgbNetId).ToArray();
+            var canRemapLayout = suggestedIds.All(id => !string.IsNullOrEmpty(id)) &&
+                                 vm.Items.Count == suggestedIds.Length &&
+                                 !vm.Items.Select(i => i.LedLayout.Id)
+                                     .SequenceEqual(suggestedIds, StringComparer.OrdinalIgnoreCase);
+
             var result = MessageBox.Show(
-                $"Add {deviceLeds.Count} LEDs from OpenRGB device?\n\nLEDs already in the layout will be skipped.\nMatrix positions will be used if available.",
+                canRemapLayout
+                    ? $"Remap the {deviceLeds.Count} existing LEDs to the IDs Artemis uses for this OpenRGB device?\n\n" +
+                      "Positions and sizes will be preserved."
+                    : $"Add {deviceLeds.Count} LEDs from OpenRGB device?\n\nLEDs already in the layout will be skipped.\nMatrix positions will be used if available.",
                 "Auto-fill from OpenRGB",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question);
             if (result != MessageBoxResult.Yes) return;
+
+            if (canRemapLayout)
+            {
+                vm.RemapLedIds(suggestedIds);
+                RebuildCustomIdMapping();
+                return;
+            }
 
             // Determine matrix dimensions to scale LEDs to fit the device image
             int maxMatrixRow = 0, maxMatrixCol = 0;
@@ -284,17 +300,24 @@ namespace LayoutEditor.UI.Controls
 
             foreach (var led in matrixLeds)
             {
-                var rgbNetId = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames, usedIds);
+                var rgbNetId = GetRgbNetId(led, usedIds);
 
                 int row = led.Row.Value;
                 int col = led.Col.Value;
 
-                while (occupied.Contains((row, col)))
+                while (led.SecondaryLayer == 0 && occupied.Contains((row, col)))
                     col++;
 
-                occupied.Add((row, col));
-                double x = col * spacingW;
-                double y = row * spacingH;
+                if (led.SecondaryLayer == 0)
+                    occupied.Add((row, col));
+
+                // Secondary emitters share a physical key. Offset them within the
+                // key instead of moving them into a different matrix column.
+                var layerOffset = led.SecondaryLayer > 0
+                    ? Math.Min(0.35, led.SecondaryLayer * 0.2)
+                    : 0;
+                double x = (col + layerOffset) * spacingW;
+                double y = (row + layerOffset) * spacingH;
 
                 leds.Add((
                     rgbNetId,
@@ -324,7 +347,7 @@ namespace LayoutEditor.UI.Controls
 
                     foreach (var led in ledsInGroup)
                     {
-                        var rgbNetId = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames, usedIds);
+                        var rgbNetId = GetRgbNetId(led, usedIds);
                         double x = fallbackCol * stripSpacing;
                         double y = fallbackRow * spacingH;
 
@@ -342,7 +365,7 @@ namespace LayoutEditor.UI.Controls
                 {
                     foreach (var led in ledsInGroup)
                     {
-                        var rgbNetId = OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames, usedIds);
+                        var rgbNetId = GetRgbNetId(led, usedIds);
 
                         while (occupied.Contains((fallbackRow, fallbackCol)))
                             fallbackCol++;
@@ -375,6 +398,18 @@ namespace LayoutEditor.UI.Controls
 
             vm.AddLedsFromDevice(leds);
             Canvas.RedrawCanvas();
+        }
+
+        private static string GetRgbNetId(DeviceLedInfo led, HashSet<string> usedIds)
+        {
+            if (!string.IsNullOrEmpty(led.SuggestedRgbNetId))
+            {
+                usedIds.Add(led.SuggestedRgbNetId);
+                OpenRgbService.RegisterCustomMapping(led.SuggestedRgbNetId, led.Name);
+                return led.SuggestedRgbNetId;
+            }
+
+            return OpenRgbService.MapToRgbNetId(led.Name, AllLedIdNames, usedIds);
         }
 
         private void UpdateStatusTexts()

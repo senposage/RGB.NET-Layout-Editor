@@ -29,11 +29,17 @@
 - Full redo stack alongside undo.
 
 ### OpenRGB Integration
+- Upgraded the embedded OpenRGB client to SDK protocol v6, including stable controller IDs and v5/v6 device-data decoding.
+- Auto-fill now mirrors RGB.NET's device-aware LED IDs. Mouse LEDs are emitted as `Mouse1`, `Mouse2`, etc. instead of `Keyboard_Custom{N}`.
+- Existing mouse layouts with the correct LED count can be remapped in place without losing edited geometry.
+- Fixed zone matrix indices being interpreted as device-global instead of zone-relative.
+- Fixed Vulcan II Max secondary emitters (`... LED 2`) being detached from their base keys and assigned unstable IDs.
+- Ignore unnamed matrix placeholders that RGB.NET does not expose, preventing an off-by-one shift in all later `Keyboard_Custom{N}` IDs.
 - Live TCP connection to OpenRGB SDK server (port 6742).
 - Hover and selection highlighting — Selected or hovered LEDs light up on the physical device.
 - Auto-fill from device — Pull the LED list from an OpenRGB device and auto-place using matrix positions, scaled to fit the device image.
 - LED name mapping — Comprehensive dictionary mapping OpenRGB names to RGB.NET `LedId` enum names for symbol keys, numpad, modifiers, navigation, and media keys.
-- Unmatched LEDs (secondary per-key LEDs, palm rest, etc.) are automatically assigned `Keyboard_Custom{N}` IDs for Artemis compatibility.
+- Unmatched keyboard LEDs (secondary per-key LEDs, palm rest, etc.) are automatically assigned `Keyboard_Custom{N}` IDs for Artemis compatibility.
 - Custom LED highlighting — `Keyboard_Custom{N}` LEDs correctly highlight on the physical device when selected in the editor.
 
 ### Save / Load
@@ -60,5 +66,5 @@
 ### Infrastructure
 - Upgraded to .NET 9.
 - Updated RGB.NET NuGet packages.
-- Added OpenRGB.NET v3.1.1 dependency.
+- Embedded and extended OpenRGB.NET under its MIT license for SDK protocol v6 support.
 - LED rename dialog.

@@ -78,12 +78,12 @@ namespace LayoutEditor.UI.Services
         // Reverse lookup: RGB.NET name → OpenRGB name (for FindMatchingLed)
         private static readonly Dictionary<string, string> RgbNetToOpenRgb;
 
-        // Runtime mapping: Keyboard_Custom{N} → original OpenRGB name (populated during auto-fill or device connect)
-        private static readonly Dictionary<string, string> CustomIdToOpenRgbName = new(StringComparer.OrdinalIgnoreCase);
+        // Runtime mapping: fallback RGB.NET ID → original OpenRGB name.
+        private static readonly Dictionary<string, string> FallbackIdToOpenRgbName = new(StringComparer.OrdinalIgnoreCase);
 
         public static void RegisterCustomMapping(string customId, string openRgbName)
         {
-            CustomIdToOpenRgbName[customId] = openRgbName;
+            FallbackIdToOpenRgbName[customId] = openRgbName;
         }
 
         static OpenRgbService()
@@ -94,6 +94,7 @@ namespace LayoutEditor.UI.Services
         }
 
         public bool IsConnected => _client?.Connected == true;
+        public uint ProtocolVersion => _client?.CommonProtocolVersion.Number ?? 0;
         public Device[] Devices => _devices ?? Array.Empty<Device>();
         public int SelectedDeviceIndex => _selectedDeviceIndex;
 
@@ -204,10 +205,12 @@ namespace LayoutEditor.UI.Services
 
             var device = _devices[_selectedDeviceIndex];
             var result = new List<DeviceLedInfo>();
+            var suggestedIds = BuildSuggestedRgbNetIds(device);
 
             // Build matrix position lookup and zone membership from all zones
             var matrixPositions = new Dictionary<int, (int row, int col)>();
             var ledZoneInfo = new Dictionary<int, (string name, string type)>();
+            var matrixZoneLedIndices = new HashSet<int>();
             int ledOffset = 0;
             foreach (var zone in device.Zones)
             {
@@ -217,13 +220,16 @@ namespace LayoutEditor.UI.Services
 
                 if (zone.MatrixMap != null)
                 {
+                    for (var j = 0; j < (int)zone.LedCount; j++)
+                        matrixZoneLedIndices.Add(ledOffset + j);
+
                     for (int row = 0; row < (int)zone.MatrixMap.Height; row++)
                     {
                         for (int col = 0; col < (int)zone.MatrixMap.Width; col++)
                         {
                             var ledIdx = zone.MatrixMap.Matrix[row, col];
                             if (ledIdx != uint.MaxValue)
-                                matrixPositions[(int)ledIdx] = (row, col);
+                                matrixPositions[TranslateZoneLedIndex(ledOffset, ledIdx)] = (row, col);
                         }
                     }
                 }
@@ -232,6 +238,11 @@ namespace LayoutEditor.UI.Services
 
             for (int i = 0; i < device.Leds.Length; i++)
             {
+                // RGB.NET ignores placeholder LEDs in matrix zones when they are
+                // absent from the matrix map. They must not consume a custom ID.
+                if (matrixZoneLedIndices.Contains(i) && !matrixPositions.ContainsKey(i))
+                    continue;
+
                 matrixPositions.TryGetValue(i, out var pos);
                 ledZoneInfo.TryGetValue(i, out var zoneInfo);
                 result.Add(new DeviceLedInfo(
@@ -240,8 +251,100 @@ namespace LayoutEditor.UI.Services
                     matrixPositions.ContainsKey(i) ? pos.row : null,
                     matrixPositions.ContainsKey(i) ? pos.col : null,
                     zoneInfo.name,
-                    zoneInfo.type
+                    zoneInfo.type,
+                    suggestedIds[i]
                 ));
+            }
+
+            // Devices such as the Roccat Vulcan II Max expose a second LED for some
+            // keys in separate linear zones. Anchor those LEDs to their base key.
+            var primaryByName = result
+                .Where(l => !string.IsNullOrEmpty(l.Name))
+                .GroupBy(l => l.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < result.Count; i++)
+            {
+                if (!TryGetSecondaryLed(result[i].Name, out var primaryName, out var layer))
+                    continue;
+
+                if (primaryByName.TryGetValue(primaryName, out var primary) &&
+                    primary.Row.HasValue && primary.Col.HasValue)
+                {
+                    result[i] = result[i] with
+                    {
+                        Row = primary.Row,
+                        Col = primary.Col,
+                        SecondaryLayer = layer - 1
+                    };
+                }
+            }
+
+            return result;
+        }
+
+        internal static bool TryGetSecondaryLed(string name, out string primaryName, out int layer)
+        {
+            var match = Regex.Match(name ?? string.Empty, @"^(.*) LED (\d+)$", RegexOptions.IgnoreCase);
+            if (match.Success && int.TryParse(match.Groups[2].Value, out layer) && layer >= 2)
+            {
+                primaryName = match.Groups[1].Value;
+                return true;
+            }
+
+            primaryName = null;
+            layer = 0;
+            return false;
+        }
+
+        private static string[] BuildSuggestedRgbNetIds(Device device)
+        {
+            var result = new string[device.Leds.Length];
+            if (device.Type != DeviceType.Keyboard)
+            {
+                for (var i = 0; i < result.Length; i++)
+                    result[i] = GetSequentialRgbNetId(device.Type, i);
+                return result;
+            }
+
+            var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var nextCustom = 1;
+            string NextCustomId()
+            {
+                string id;
+                do id = $"Keyboard_Custom{nextCustom++}";
+                while (!usedIds.Add(id));
+                return id;
+            }
+
+            var ledOffset = 0;
+            foreach (var zone in device.Zones)
+            {
+                if (zone.MatrixMap != null)
+                {
+                    for (var row = 0; row < (int)zone.MatrixMap.Height; row++)
+                    {
+                        for (var col = 0; col < (int)zone.MatrixMap.Width; col++)
+                        {
+                            var zoneIndex = zone.MatrixMap.Matrix[row, col];
+                            if (zoneIndex == uint.MaxValue)
+                                continue;
+
+                            var index = TranslateZoneLedIndex(ledOffset, zoneIndex);
+                            if (index < 0 || index >= device.Leds.Length || result[index] != null)
+                                continue;
+
+                            var mapped = TryMapStandardKeyboardId(device.Leds[index].Name);
+                            result[index] = mapped != null && usedIds.Add(mapped) ? mapped : NextCustomId();
+                        }
+                    }
+                }
+                else
+                {
+                    for (var i = 0; i < (int)zone.LedCount && ledOffset + i < result.Length; i++)
+                        result[ledOffset + i] = NextCustomId();
+                }
+
+                ledOffset += (int)zone.LedCount;
             }
 
             return result;
@@ -281,6 +384,21 @@ namespace LayoutEditor.UI.Services
             return AssignCustomId(usedIds, openRgbName);
         }
 
+        private static string TryMapStandardKeyboardId(string openRgbName)
+        {
+            if (string.IsNullOrEmpty(openRgbName))
+                return null;
+
+            if (OpenRgbToRgbNet.TryGetValue(openRgbName, out var mapped) &&
+                mapped.StartsWith("Keyboard_", StringComparison.Ordinal))
+                return mapped;
+
+            var normalized = NormalizeName(openRgbName);
+            return Enum.GetNames(typeof(RGB.NET.Core.LedId))
+                .FirstOrDefault(id => id.StartsWith("Keyboard_", StringComparison.Ordinal) &&
+                                      NormalizeName(id) == normalized);
+        }
+
         private static string AssignCustomId(HashSet<string> usedIds, string originalOpenRgbName)
         {
             for (int i = 1; i <= 99; i++)
@@ -290,7 +408,7 @@ namespace LayoutEditor.UI.Services
                 {
                     usedIds?.Add(id);
                     if (!string.IsNullOrEmpty(originalOpenRgbName))
-                        CustomIdToOpenRgbName[id] = originalOpenRgbName;
+                        FallbackIdToOpenRgbName[id] = originalOpenRgbName;
                     return id;
                 }
             }
@@ -301,8 +419,8 @@ namespace LayoutEditor.UI.Services
         {
             if (string.IsNullOrEmpty(ledId)) return -1;
 
-            // Check Custom ID mapping first (Keyboard_Custom{N} → original OpenRGB name)
-            if (CustomIdToOpenRgbName.TryGetValue(ledId, out var customOriginal))
+            // Check the runtime fallback mapping first.
+            if (FallbackIdToOpenRgbName.TryGetValue(ledId, out var customOriginal))
             {
                 for (int i = 0; i < device.Leds.Length; i++)
                 {
@@ -310,6 +428,10 @@ namespace LayoutEditor.UI.Services
                         return i;
                 }
             }
+
+            var sequentialIndex = GetSequentialLedIndex(device.Type, ledId);
+            if (sequentialIndex >= 0 && sequentialIndex < device.Leds.Length)
+                return sequentialIndex;
 
             // If ledId is an RGB.NET name, try ALL OpenRGB names that map to it
             // (e.g. Keyboard_Function → "Key: Right Fn" and "Key: Left Fn")
@@ -367,11 +489,51 @@ namespace LayoutEditor.UI.Services
             return name.Trim().ToLowerInvariant();
         }
 
+        internal static int TranslateZoneLedIndex(int zoneOffset, uint zoneLedIndex)
+            => checked(zoneOffset + (int)zoneLedIndex);
+
+        internal static string GetSequentialRgbNetId(DeviceType deviceType, int ledIndex)
+        {
+            var prefix = deviceType switch
+            {
+                DeviceType.Mouse => "Mouse",
+                DeviceType.Mousemat => "Mousepad",
+                DeviceType.Headset => "Headset",
+                DeviceType.Ledstrip => "LedStripe",
+                DeviceType.Motherboard => "Mainboard",
+                DeviceType.Gpu => "GraphicsCard",
+                DeviceType.Dram => "DRAM",
+                DeviceType.Cooler => "Cooler",
+                DeviceType.Speaker => "Speaker",
+                DeviceType.HeadsetStand => "HeadsetStand",
+                DeviceType.Keyboard => null,
+                _ => "Custom"
+            };
+
+            return prefix == null ? null : $"{prefix}{ledIndex + 1}";
+        }
+
+        internal static int GetSequentialLedIndex(DeviceType deviceType, string ledId)
+        {
+            var firstId = GetSequentialRgbNetId(deviceType, 0);
+            if (firstId == null)
+                return -1;
+
+            var prefix = firstId[..^1];
+            if (!ledId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return -1;
+
+            return int.TryParse(ledId[prefix.Length..], out var number) && number > 0
+                ? number - 1
+                : -1;
+        }
+
         public void Dispose()
         {
             Disconnect();
         }
     }
 
-    public record struct DeviceLedInfo(string Name, int Index, int? Row, int? Col, string ZoneName = null, string ZoneType = null);
+    public record struct DeviceLedInfo(string Name, int Index, int? Row, int? Col, string ZoneName = null,
+        string ZoneType = null, string SuggestedRgbNetId = null, int SecondaryLayer = 0);
 }

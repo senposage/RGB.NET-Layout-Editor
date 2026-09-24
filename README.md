@@ -106,7 +106,12 @@ Connect to a running [OpenRGB](https://openrgb.org/) instance to visualize LED s
 **Features:**
 - **Hover highlighting** — Hovering over a LED in the editor lights it up on the physical device.
 - **Selection highlighting** — Selected LEDs stay lit.
-- **Auto-fill from device** — Click **Auto-fill** to pull all LEDs from the OpenRGB device. LEDs are placed using matrix positions and scaled to fit the device image. LEDs with no RGB.NET match are assigned `Keyboard_Custom{N}` IDs for Artemis compatibility.
+- **SDK v6 support** — Negotiates OpenRGB protocol v6, including stable controller IDs and the v6 controller-data format.
+- **Auto-fill from device** — Click **Auto-fill** to pull the LED list from OpenRGB. LEDs are placed using matrix positions and scaled to fit the device image.
+- **Device-aware IDs** — Non-keyboard devices use the same sequential IDs as RGB.NET (`Mouse1`, `Mouse2`, etc.). Unmatched keyboard LEDs use `Keyboard_Custom{N}`.
+- **Existing layouts** — Auto-fill can remap a full existing layout to Artemis-compatible IDs while preserving its positions and sizes.
+- **Multi-emitter keys** — Secondary key emitters such as `Key: Caps Lock LED 2` inherit the matrix position of their base key and receive stable `Keyboard_Custom{N}` IDs.
+- **Matrix placeholders** — Unmapped placeholder records are ignored so they do not shift every later custom LED ID.
 
 ### LED Name Mapping
 

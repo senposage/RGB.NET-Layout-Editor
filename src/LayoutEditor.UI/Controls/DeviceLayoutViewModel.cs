@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
@@ -309,6 +310,26 @@ namespace LayoutEditor.UI.Controls
                 Items.Add(vm);
                 added++;
             }
+        }
+
+        /// <summary>
+        /// Replace LED IDs in their existing order while preserving the edited layout geometry.
+        /// </summary>
+        public void RemapLedIds(IReadOnlyList<string> ids)
+        {
+            if (ids.Count != Items.Count)
+                throw new ArgumentException("The ID count must match the layout LED count.", nameof(ids));
+
+            if (ids.Distinct(StringComparer.OrdinalIgnoreCase).Count() != ids.Count)
+                throw new ArgumentException("LED IDs must be unique.", nameof(ids));
+
+            for (var i = 0; i < Items.Count; i++)
+            {
+                Items[i].LedLayout.Id = ids[i];
+                Items[i].PopulateInputOnly();
+            }
+
+            _canvas?.RedrawCanvas();
         }
 
         protected override void OnInitialActivate()

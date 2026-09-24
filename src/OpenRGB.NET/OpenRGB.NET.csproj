@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net9.0</TargetFramework>
+        <LangVersion>latest</LangVersion>
+        <Nullable>enable</Nullable>
+        <Version>3.2.0-v6</Version>
+        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <Authors>Diogo Trindade</Authors>
+        <Company>Diogo Trindade</Company>
+        <Description>Client for the OpenRGB SDK</Description>
+        <Copyright>Copyright © 2020 Diogo Trindade</Copyright>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/diogotr7/OpenRGB.NET</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/diogotr7/OpenRGB.NET</RepositoryUrl>
+        <PackageTags>openrgb, rgb, sdk, client</PackageTags>
+    </PropertyGroup>
+    
+    <ItemGroup>
+        <InternalsVisibleTo Include="$(AssemblyName).Tests" />
+        <InternalsVisibleTo Include="LayoutEditor.Tests" />
+    </ItemGroup>
+
+</Project>
